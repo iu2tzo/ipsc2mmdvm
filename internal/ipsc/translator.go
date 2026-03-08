@@ -13,6 +13,7 @@ import (
 	"github.com/USA-RedDragon/dmrgo/dmr/layer2/pdu"
 	l3elements "github.com/USA-RedDragon/dmrgo/dmr/layer3/elements"
 	"github.com/USA-RedDragon/dmrgo/dmr/vocoder"
+	"github.com/USA-RedDragon/ipsc2mmdvm/internal/metrics"
 	mmdvm "github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
 )
 
@@ -25,6 +26,7 @@ import (
 // reverse direction.
 type IPSCTranslator struct {
 	mu             sync.Mutex
+	metrics        *metrics.Metrics
 	peerID         uint32
 	repeaterID     uint32
 	streams        map[uint32]*streamState
@@ -72,6 +74,11 @@ func NewIPSCTranslator() (*IPSCTranslator, error) {
 	}, nil
 }
 
+// SetMetrics configures the metrics collector for this translator.
+func (t *IPSCTranslator) SetMetrics(m *metrics.Metrics) {
+	t.metrics = m
+}
+
 // SetPeerID sets the local peer ID used in outgoing IPSC packets.
 func (t *IPSCTranslator) SetPeerID(peerID uint32) {
 	t.peerID = peerID
@@ -102,6 +109,9 @@ func (t *IPSCTranslator) TranslateToIPSC(pkt mmdvm.Packet) [][]byte {
 			firstPacket: true,
 		}
 		t.streams[uint32(streamID)] = ss
+		if t.metrics != nil {
+			t.metrics.TranslatorActiveStreams.WithLabelValues("mmdvm_to_ipsc").Inc()
+		}
 	}
 
 	frameType := pkt.FrameType
@@ -131,6 +141,9 @@ func (t *IPSCTranslator) TranslateToIPSC(pkt mmdvm.Packet) [][]byte {
 			results = append(results, data)
 			// Clean up stream state
 			delete(t.streams, uint32(streamID))
+			if t.metrics != nil {
+				t.metrics.TranslatorActiveStreams.WithLabelValues("mmdvm_to_ipsc").Dec()
+			}
 		case elements.DataTypeCSBK, elements.DataTypePIHeader,
 			elements.DataTypeDataHeader, elements.DataTypeRate12,
 			elements.DataTypeRate34, elements.DataTypeRate1,
@@ -158,6 +171,10 @@ func (t *IPSCTranslator) TranslateToIPSC(pkt mmdvm.Packet) [][]byte {
 	default:
 		slog.Debug("IPSCTranslator: unknown frame type", "frameType", frameType)
 		return nil
+	}
+
+	if t.metrics != nil && len(results) > 0 {
+		t.metrics.TranslatorPackets.WithLabelValues("mmdvm_to_ipsc").Add(float64(len(results)))
 	}
 
 	return results
@@ -522,6 +539,9 @@ func (t *IPSCTranslator) TranslateToMMDVM(packetType byte, data []byte) []mmdvm.
 			streamID: t.nextStreamID,
 		}
 		t.reverseStreams[callControl] = rss
+		if t.metrics != nil {
+			t.metrics.TranslatorActiveStreams.WithLabelValues("ipsc_to_mmdvm").Inc()
+		}
 	}
 
 	// Determine what kind of IPSC burst this is from byte 30
@@ -548,6 +568,9 @@ func (t *IPSCTranslator) TranslateToMMDVM(packetType byte, data []byte) []mmdvm.
 		results = append(results, pkt)
 		// Clean up
 		delete(t.reverseStreams, callControl)
+		if t.metrics != nil {
+			t.metrics.TranslatorActiveStreams.WithLabelValues("ipsc_to_mmdvm").Dec()
+		}
 
 	case ipscBurstSlot1, ipscBurstSlot2:
 		// Voice burst — extract AMBE, FEC-encode, build DMR burst
@@ -582,6 +605,13 @@ func (t *IPSCTranslator) TranslateToMMDVM(packetType byte, data []byte) []mmdvm.
 	if isEnd && burstType != ipscBurstVoiceTerm {
 		// End flag set but not a terminator — clean up anyway
 		delete(t.reverseStreams, callControl)
+		if t.metrics != nil {
+			t.metrics.TranslatorActiveStreams.WithLabelValues("ipsc_to_mmdvm").Dec()
+		}
+	}
+
+	if t.metrics != nil && len(results) > 0 {
+		t.metrics.TranslatorPackets.WithLabelValues("ipsc_to_mmdvm").Add(float64(len(results)))
 	}
 
 	return results

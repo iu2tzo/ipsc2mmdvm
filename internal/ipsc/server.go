@@ -15,13 +15,15 @@ import (
 	"time"
 
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/config"
+	"github.com/USA-RedDragon/ipsc2mmdvm/internal/metrics"
 	"github.com/vishvananda/netlink"
 )
 
 type IPSCServer struct {
-	cfg *config.Config
-	udp *net.UDPConn
-	mu  sync.RWMutex
+	cfg     *config.Config
+	metrics *metrics.Metrics
+	udp     *net.UDPConn
+	mu      sync.RWMutex
 
 	localID  uint32
 	authKey  []byte // 20-byte HMAC key decoded from hex
@@ -72,7 +74,7 @@ var (
 
 var ErrPacketIgnored = errors.New("packet ignored")
 
-func NewIPSCServer(cfg *config.Config) *IPSCServer {
+func NewIPSCServer(cfg *config.Config, m *metrics.Metrics) *IPSCServer {
 	// Decode the auth key from hex string to raw bytes.
 	// DMRlink left-pads the hex key to 40 characters (20 bytes) with zeros.
 	var authKey []byte
@@ -98,6 +100,7 @@ func NewIPSCServer(cfg *config.Config) *IPSCServer {
 
 	return &IPSCServer{
 		cfg:      cfg,
+		metrics:  m,
 		localID:  localID,
 		authKey:  authKey,
 		peers:    map[uint32]*Peer{},
@@ -178,6 +181,9 @@ func (s *IPSCServer) handler() {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
+			if s.metrics != nil {
+				s.metrics.IPSCUDPErrors.WithLabelValues("read").Inc()
+			}
 			slog.Warn("error reading from UDP", "error", err)
 			continue
 		}
@@ -213,29 +219,68 @@ func (s *IPSCServer) handlePacket(data []byte, addr *net.UDPAddr) (*Packet, erro
 			return nil, fmt.Errorf("packet too short for authentication")
 		}
 		if !s.auth(data) {
+			if s.metrics != nil {
+				s.metrics.IPSCAuthFailures.Inc()
+			}
 			return nil, fmt.Errorf("authentication failed")
 		}
 		data = data[:len(data)-10] // Remove the hash from the data
 	}
 
 	switch PacketType(packetType) {
-	case PacketType_GroupVoice, PacketType_PrivateVoice, PacketType_GroupData, PacketType_PrivateData:
+	case PacketType_GroupVoice:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("group_voice").Inc()
+		}
+		if err := s.handleUserPacket(PacketType(packetType), data, addr); err != nil {
+			return nil, err
+		}
+	case PacketType_PrivateVoice:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("private_voice").Inc()
+		}
+		if err := s.handleUserPacket(PacketType(packetType), data, addr); err != nil {
+			return nil, err
+		}
+	case PacketType_GroupData:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("group_data").Inc()
+		}
+		if err := s.handleUserPacket(PacketType(packetType), data, addr); err != nil {
+			return nil, err
+		}
+	case PacketType_PrivateData:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("private_data").Inc()
+		}
 		if err := s.handleUserPacket(PacketType(packetType), data, addr); err != nil {
 			return nil, err
 		}
 	case PacketType_RepeaterWakeUp:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("wake_up").Inc()
+		}
 		if err := s.handleRepeaterWakeUp(data, addr); err != nil {
 			return nil, err
 		}
 	case PacketType_MasterRegisterRequest:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("register").Inc()
+		}
 		if err := s.handleMasterRegisterRequest(data, addr); err != nil {
 			return nil, err
 		}
 	case PacketType_MasterAliveRequest:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("alive").Inc()
+		}
 		if err := s.handleMasterAliveRequest(data, addr); err != nil {
 			return nil, err
 		}
 	case PacketType_PeerListRequest:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("peer_list").Inc()
+		}
 		if err := s.handlePeerListRequest(data, addr); err != nil {
 			return nil, err
 		}
@@ -243,6 +288,9 @@ func (s *IPSCServer) handlePacket(data []byte, addr *net.UDPAddr) (*Packet, erro
 		// These are reply packets, we shouldn't receive them as a server, keeping quiet.
 		return nil, ErrPacketIgnored
 	default:
+		if s.metrics != nil {
+			s.metrics.IPSCPacketsReceived.WithLabelValues("other").Inc()
+		}
 		return nil, fmt.Errorf("unknown packet type: %d", packetType)
 	}
 
@@ -346,6 +394,10 @@ func (s *IPSCServer) upsertPeer(peerID uint32, addr *net.UDPAddr, mode byte, fla
 	peer.Flags = flags
 	peer.LastSeen = time.Now()
 	peer.RegistrationStatus = true
+
+	if s.metrics != nil {
+		s.metrics.IPSCPeersRegistered.Set(float64(len(s.peers)))
+	}
 }
 
 func (s *IPSCServer) markPeerAlive(peerID uint32, addr *net.UDPAddr) {
@@ -511,6 +563,9 @@ func (s *IPSCServer) sendPacket(packet *Packet, addr *net.UDPAddr) error {
 
 	n, err := s.udp.WriteToUDP(packet.data, addr)
 	if err != nil {
+		if s.metrics != nil {
+			s.metrics.IPSCUDPErrors.WithLabelValues("write").Inc()
+		}
 		return fmt.Errorf("error sending packet: %w", err)
 	}
 	if n != len(packet.data) {
@@ -540,6 +595,8 @@ func (s *IPSCServer) SendUserPacket(data []byte) {
 		slog.Debug("IPSC burst sending", "peer", peer.Addr, "length", len(packet.data))
 		if err := s.sendPacket(packet, peer.Addr); err != nil {
 			slog.Warn("failed sending IPSC user packet", "peer", peer.Addr, "error", err)
+		} else if s.metrics != nil {
+			s.metrics.IPSCPacketsSent.Inc()
 		}
 	}
 }

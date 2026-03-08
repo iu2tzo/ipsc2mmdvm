@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"time"
 
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
 )
@@ -76,11 +77,15 @@ func (h *MMDVMClient) sendPing() {
 		n    = copy(data, "RPTPING")
 	)
 	binary.BigEndian.PutUint32(data[n:], h.cfg.ID)
+	h.lastPingSent.Store(time.Now().UnixNano())
 	h.connTX <- data
 }
 
 func (h *MMDVMClient) sendPacket(packet proto.Packet) {
 	data := make([]byte, 53)
 	copy(data, packet.Encode())
+	if h.metrics != nil {
+		h.metrics.MMDVMPacketsSent.WithLabelValues(h.cfg.Name).Inc()
+	}
 	h.connTX <- data
 }

@@ -12,28 +12,31 @@ import (
 
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/config"
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/ipsc"
+	"github.com/USA-RedDragon/ipsc2mmdvm/internal/metrics"
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/rewrite"
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/timeslot"
 )
 
 type MMDVMClient struct {
-	cfg         *config.MMDVM
-	started     atomic.Bool
-	done        chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
-	tx_chan     chan proto.Packet
-	conn        net.Conn
-	connMu      sync.Mutex // protects conn
-	state       atomic.Uint32
-	connRX      chan []byte
-	connTX      chan []byte
-	keepAlive   time.Duration
-	timeout     time.Duration
-	lastPing    atomic.Int64 // UnixNano
-	ipscHandler func(data []byte)
-	translator  *ipsc.IPSCTranslator
+	cfg          *config.MMDVM
+	metrics      *metrics.Metrics
+	started      atomic.Bool
+	done         chan struct{}
+	stopOnce     sync.Once
+	wg           sync.WaitGroup
+	tx_chan      chan proto.Packet
+	conn         net.Conn
+	connMu       sync.Mutex // protects conn
+	state        atomic.Uint32
+	connRX       chan []byte
+	connTX       chan []byte
+	keepAlive    time.Duration
+	timeout      time.Duration
+	lastPing     atomic.Int64 // UnixNano — last MSTPONG received
+	lastPingSent atomic.Int64 // UnixNano — last RPTPING sent
+	ipscHandler  func(data []byte)
+	translator   *ipsc.IPSCTranslator
 
 	// Rewrite rules built from config, applied to packets
 	// flowing through this network.
@@ -69,7 +72,7 @@ const (
 	dtypeTerminatorWithLC uint = 2 // DataType value for Terminator with Link Control
 )
 
-func NewMMDVMClient(cfg *config.MMDVM) *MMDVMClient {
+func NewMMDVMClient(cfg *config.MMDVM, m *metrics.Metrics) *MMDVMClient {
 	tx_chan := make(chan proto.Packet, 256)
 	translator, err := ipsc.NewIPSCTranslator()
 	if err != nil {
@@ -77,6 +80,7 @@ func NewMMDVMClient(cfg *config.MMDVM) *MMDVMClient {
 	}
 	c := &MMDVMClient{
 		cfg:          cfg,
+		metrics:      m,
 		done:         make(chan struct{}),
 		tx_chan:      tx_chan,
 		connRX:       make(chan []byte, 16),
@@ -88,6 +92,12 @@ func NewMMDVMClient(cfg *config.MMDVM) *MMDVMClient {
 	}
 	c.state.Store(uint32(STATE_IDLE))
 	c.buildRewriteRules()
+	if m != nil {
+		if translator != nil {
+			translator.SetMetrics(m)
+		}
+		c.inboundTSMgr.SetMetrics(m, "inbound")
+	}
 	return c
 }
 
@@ -183,6 +193,10 @@ func (h *MMDVMClient) Start() error {
 
 	slog.Info("Connecting to MMDVM server", "network", h.cfg.Name)
 
+	if h.metrics != nil {
+		h.metrics.MMDVMConnectionState.WithLabelValues(h.cfg.Name).Set(1)
+	}
+
 	err := h.connect()
 	if err != nil {
 		return err
@@ -277,6 +291,9 @@ func (h *MMDVMClient) handleSentAuth(data []byte) {
 		h.sendRPTC()
 	} else if len(data) >= 6 && string(data[:6]) == "RPTNAK" {
 		slog.Info("Password rejected", "network", h.cfg.Name)
+		if h.metrics != nil {
+			h.metrics.MMDVMAuthFailures.WithLabelValues(h.cfg.Name).Inc()
+		}
 		h.state.Store(uint32(STATE_SENT_LOGIN))
 		time.Sleep(1 * time.Second)
 		h.sendLogin()
@@ -287,6 +304,9 @@ func (h *MMDVMClient) handleSentRPTC(data []byte) {
 	if len(data) >= 6 && string(data[:6]) == rptAck {
 		slog.Info("Config accepted, starting ping routine", "network", h.cfg.Name)
 		h.state.Store(uint32(STATE_READY))
+		if h.metrics != nil {
+			h.metrics.MMDVMConnectionState.WithLabelValues(h.cfg.Name).Set(2)
+		}
 		h.wg.Add(1)
 		go h.ping()
 	} else if len(data) >= 6 && string(data[:6]) == "MSTNAK" {
@@ -300,7 +320,14 @@ func (h *MMDVMClient) handleReady(data []byte) {
 	switch string(data[:4]) {
 	case "MSTP":
 		if len(data) >= 7 && string(data[:7]) == "MSTPONG" {
-			h.lastPing.Store(time.Now().UnixNano())
+			now := time.Now()
+			if h.metrics != nil {
+				sent := time.Unix(0, h.lastPingSent.Load())
+				if !sent.IsZero() {
+					h.metrics.MMDVMPingRTT.WithLabelValues(h.cfg.Name).Observe(now.Sub(sent).Seconds())
+				}
+			}
+			h.lastPing.Store(now.UnixNano())
 		}
 	case "RPTS":
 		if len(data) >= 7 && string(data[:7]) == "RPTSBKN" {
@@ -312,10 +339,16 @@ func (h *MMDVMClient) handleReady(data []byte) {
 			slog.Info("Error unpacking packet", "network", h.cfg.Name)
 			return
 		}
+		if h.metrics != nil {
+			h.metrics.MMDVMPacketsReceived.WithLabelValues(h.cfg.Name).Inc()
+		}
 		slog.Debug("MMDVM DMRD received", "network", h.cfg.Name, "packet", packet)
 
 		if !rewrite.Apply(h.netRewrites, &packet) {
 			slog.Debug("MMDVM DMRD dropped (no rewrite rule matched)", "network", h.cfg.Name)
+			if h.metrics != nil {
+				h.metrics.MMDVMPacketsDropped.WithLabelValues(h.cfg.Name, "no_rewrite").Inc()
+			}
 			return
 		}
 
@@ -327,6 +360,9 @@ func (h *MMDVMClient) handleReady(data []byte) {
 			if !h.outboundTSMgr.Submit(packet.Slot, packet.StreamID, h.cfg.Name, packet) {
 				slog.Debug("MMDVM DMRD buffered (timeslot busy)",
 					"network", h.cfg.Name, "slot", packet.Slot, "streamID", packet.StreamID)
+				if h.metrics != nil {
+					h.metrics.MMDVMPacketsDropped.WithLabelValues(h.cfg.Name, "timeslot_busy").Inc()
+				}
 				return
 			}
 		}
@@ -392,6 +428,10 @@ func (h *MMDVMClient) handshakeWatchdog() {
 // sends a fresh login. It is safe to call from any goroutine.
 func (h *MMDVMClient) reconnect() {
 	h.state.Store(uint32(STATE_TIMEOUT))
+	if h.metrics != nil {
+		h.metrics.MMDVMConnectionState.WithLabelValues(h.cfg.Name).Set(0)
+		h.metrics.MMDVMReconnects.WithLabelValues(h.cfg.Name).Inc()
+	}
 	h.connMu.Lock()
 	if h.conn != nil {
 		if err := h.conn.Close(); err != nil {
@@ -651,6 +691,9 @@ func (h *MMDVMClient) HandleIPSCBurst(packetType byte, data []byte, addr *net.UD
 		if !rewrite.Apply(h.rfRewrites, &pkt) {
 			if !rewrite.Apply(h.passallRewrites, &pkt) {
 				slog.Debug("HandleIPSCBurst: dropped (no rewrite rule matched)", "network", h.cfg.Name)
+				if h.metrics != nil {
+					h.metrics.MMDVMPacketsDropped.WithLabelValues(h.cfg.Name, "no_rewrite").Inc()
+				}
 				continue
 			}
 		}
@@ -662,6 +705,9 @@ func (h *MMDVMClient) HandleIPSCBurst(packetType byte, data []byte, addr *net.UD
 			if !h.inboundTSMgr.Submit(pkt.Slot, pkt.StreamID, "ipsc", pkt) {
 				slog.Debug("HandleIPSCBurst: buffered (timeslot busy)",
 					"network", h.cfg.Name, "slot", pkt.Slot, "streamID", pkt.StreamID)
+				if h.metrics != nil {
+					h.metrics.MMDVMPacketsDropped.WithLabelValues(h.cfg.Name, "timeslot_busy").Inc()
+				}
 				continue
 			}
 		}

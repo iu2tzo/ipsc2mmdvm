@@ -60,6 +60,10 @@ ipsc:
     enabled: false        # Set to true if you configured an auth key in CPS
     key: ""               # Hex string, up to 40 characters (must match CPS)
 
+metrics:
+  enabled: false          # Enable Prometheus metrics endpoint
+  address: ":9100"        # Address to serve metrics on (e.g. ":9100" for all interfaces)
+
 mmdvm:
   - name: "BrandMeister"  # Friendly name for logging
     master-server: "3104.master.brandmeister.network:62031"  # BrandMeister master (see below)

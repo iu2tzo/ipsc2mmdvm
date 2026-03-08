@@ -137,7 +137,7 @@ func TestAuth(t *testing.T) {
 	t.Parallel()
 	key := "0000000000000000000000000000000000001234"
 	cfg := testConfig(true, "1234")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	payload := []byte("hello world")
 	h := hmac.New(sha1.New, mustDecodeHex(t, key))
@@ -155,7 +155,7 @@ func TestAuth(t *testing.T) {
 func TestAuthBadHash(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(true, "1234")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	payload := []byte("hello world")
 	bad := make([]byte, 10)
@@ -192,7 +192,7 @@ func mustDecodeHex(t *testing.T, hexStr string) []byte {
 func TestNewIPSCServerNoAuth(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	if s == nil {
 		t.Fatal("expected non-nil server")
 	}
@@ -207,7 +207,7 @@ func TestNewIPSCServerNoAuth(t *testing.T) {
 func TestNewIPSCServerWithAuth(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(true, "ABCD")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	if s.authKey == nil {
 		t.Fatal("expected non-nil auth key")
 	}
@@ -219,7 +219,7 @@ func TestNewIPSCServerWithAuth(t *testing.T) {
 func TestDefaultModeByte(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	mode := s.defaultModeByte()
 	// Should have operational, digital, ts1, ts2 bits
 	if mode&0b01000000 == 0 {
@@ -239,7 +239,7 @@ func TestDefaultModeByte(t *testing.T) {
 func TestDefaultFlagsBytesNoAuth(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	flags := s.defaultFlagsBytes()
 	if flags[3]&0x10 != 0 {
 		t.Fatal("expected auth flag clear when auth disabled")
@@ -252,7 +252,7 @@ func TestDefaultFlagsBytesNoAuth(t *testing.T) {
 func TestDefaultFlagsBytesWithAuth(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(true, "1234")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	flags := s.defaultFlagsBytes()
 	if flags[3]&0x10 == 0 {
 		t.Fatal("expected auth flag set when auth enabled")
@@ -262,7 +262,7 @@ func TestDefaultFlagsBytesWithAuth(t *testing.T) {
 func TestBuildMasterRegisterReply(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	reply := s.buildMasterRegisterReply()
 
 	if reply[0] != byte(PacketType_MasterRegisterReply) {
@@ -278,7 +278,7 @@ func TestBuildMasterRegisterReply(t *testing.T) {
 func TestBuildMasterAliveReply(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	reply := s.buildMasterAliveReply()
 
 	if reply[0] != byte(PacketType_MasterAliveReply) {
@@ -289,7 +289,7 @@ func TestBuildMasterAliveReply(t *testing.T) {
 func TestBuildPeerListReplyEmpty(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	reply := s.buildPeerListReply()
 
 	if reply[0] != byte(PacketType_PeerListReply) {
@@ -306,7 +306,7 @@ func TestBuildPeerListReplyEmpty(t *testing.T) {
 func TestBuildPeerListReplyWithPeers(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 50000}
 	s.upsertPeer(42, addr, 0x6A, [4]byte{0, 0, 0, 0x0D})
@@ -325,7 +325,7 @@ func TestBuildPeerListReplyWithPeers(t *testing.T) {
 func TestUpsertPeerAndCount(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	if s.peerCount() != 0 {
 		t.Fatalf("expected 0 peers initially, got %d", s.peerCount())
@@ -355,7 +355,7 @@ func TestUpsertPeerAndCount(t *testing.T) {
 func TestMarkPeerAlive(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1234}
 	s.markPeerAlive(100, addr)
@@ -379,7 +379,7 @@ func TestMarkPeerAlive(t *testing.T) {
 func TestHandlePacketTooShort(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
 	_, err := s.handlePacket([]byte{}, addr)
@@ -391,7 +391,7 @@ func TestHandlePacketTooShort(t *testing.T) {
 func TestHandlePacketUnknownType(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
 	data := []byte{0xFF, 0, 0, 0, 1}
@@ -404,7 +404,7 @@ func TestHandlePacketUnknownType(t *testing.T) {
 func TestHandlePacketReplyTypesIgnored(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
 	replyTypes := []byte{
@@ -448,7 +448,7 @@ func TestPacketTypeValues(t *testing.T) {
 func TestUpsertPeerRegistrationStatus(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1234}
 	s.upsertPeer(100, addr, 0x6A, [4]byte{})
@@ -472,7 +472,7 @@ func TestUpsertPeerRegistrationStatus(t *testing.T) {
 func newTestServerWithUDP(t *testing.T, authEnabled bool, authKey string) (*IPSCServer, *net.UDPAddr) {
 	t.Helper()
 	cfg := testConfig(authEnabled, authKey)
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	// Bind to loopback on a random port
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
@@ -770,7 +770,7 @@ func TestHandlePeerListRequestTooShort(t *testing.T) {
 func TestHandleRepeaterWakeUp(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 3000}
 	peerID := uint32(11111)
@@ -795,7 +795,7 @@ func TestHandleRepeaterWakeUp(t *testing.T) {
 func TestHandleRepeaterWakeUpTooShort(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 3000}
 	data := []byte{byte(PacketType_RepeaterWakeUp), 0x00}
@@ -810,7 +810,7 @@ func TestHandleRepeaterWakeUpTooShort(t *testing.T) {
 func TestHandleUserPacketCallsBurstHandler(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	var received atomic.Bool
 	var gotType atomic.Uint32
@@ -853,7 +853,7 @@ func TestHandleUserPacketCallsBurstHandler(t *testing.T) {
 func TestHandleUserPacketNoBurstHandler(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	// No burst handler set
 
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1234}
@@ -879,7 +879,7 @@ func TestHandleUserPacketAllTypes(t *testing.T) {
 
 	for _, pt := range types {
 		cfg := testConfig(false, "")
-		s := NewIPSCServer(cfg)
+		s := NewIPSCServer(cfg, nil)
 
 		addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1234}
 		data := make([]byte, 54)
@@ -896,7 +896,7 @@ func TestHandleUserPacketAllTypes(t *testing.T) {
 func TestHandleUserPacketTooShortForPeerID(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1234}
 	data := []byte{byte(PacketType_GroupVoice), 0x00, 0x01}
@@ -910,7 +910,7 @@ func TestHandleUserPacketTooShortForPeerID(t *testing.T) {
 func TestHandleUserPacketBurstHandlerReceivesDataCopy(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	var receivedData []byte
 	var wg sync.WaitGroup
@@ -946,7 +946,7 @@ func TestHandleUserPacketBurstHandlerReceivesDataCopy(t *testing.T) {
 func TestHandlePacketAuthEnabledTooShort(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(true, "1234")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
 	// A packet with auth enabled but only 10 bytes (not enough for payload + hash)
@@ -961,7 +961,7 @@ func TestHandlePacketAuthEnabledTooShort(t *testing.T) {
 func TestHandlePacketAuthEnabledBadHash(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(true, "1234")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
 	// Valid-length packet but bad hash
@@ -1010,7 +1010,7 @@ func TestHandlePacketAuthEnabledSuccess(t *testing.T) {
 func TestAuthDisabledAlwaysPasses(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
 	// When auth is disabled, no HMAC is needed
@@ -1201,7 +1201,7 @@ func TestSendUserPacketDataIsCopied(t *testing.T) {
 func TestPacePeerFirstCallNoDelay(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	start := time.Now()
 	s.pacePeer(1)
@@ -1216,7 +1216,7 @@ func TestPacePeerFirstCallNoDelay(t *testing.T) {
 func TestPacePeerEnforcesInterval(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	// First call establishes the timestamp
 	s.pacePeer(1)
@@ -1234,7 +1234,7 @@ func TestPacePeerEnforcesInterval(t *testing.T) {
 func TestPacePeerSeparatePeersIndependent(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	// Pace peer 1
 	s.pacePeer(1)
@@ -1252,7 +1252,7 @@ func TestPacePeerSeparatePeersIndependent(t *testing.T) {
 func TestPacePeerAfterInterval(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	s.pacePeer(1)
 	// Wait longer than the burst interval (30ms)
@@ -1273,7 +1273,7 @@ func TestPacePeerAfterInterval(t *testing.T) {
 func TestHandlerLoopProcessesPackets(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	// Bind to loopback
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
@@ -1331,7 +1331,7 @@ func TestHandlerLoopProcessesPackets(t *testing.T) {
 func TestStopIdempotent(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
@@ -1351,7 +1351,7 @@ func TestStopIdempotent(t *testing.T) {
 func TestStopWithNilConn(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	// udp is nil — Stop should not panic
 	s.Stop()
 }
@@ -1359,7 +1359,7 @@ func TestStopWithNilConn(t *testing.T) {
 func TestHandlerLoopWithBurstHandler(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
@@ -1411,7 +1411,7 @@ func TestHandlerLoopWithBurstHandler(t *testing.T) {
 func TestBuildPeerListSkipsNilAddr(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	s.mu.Lock()
 	s.peers[1] = &Peer{ID: 1, Addr: nil, Mode: 0x6A}
@@ -1428,7 +1428,7 @@ func TestBuildPeerListSkipsNilAddr(t *testing.T) {
 func TestBuildPeerListMultiplePeers(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	s.upsertPeer(1, &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 5000}, 0x6A, [4]byte{})
 	s.upsertPeer(2, &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 6000}, 0x6B, [4]byte{})
@@ -1445,7 +1445,7 @@ func TestBuildPeerListMultiplePeers(t *testing.T) {
 func TestSetBurstHandler(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	if s.burstHandler != nil {
 		t.Fatal("expected nil burst handler initially")
@@ -1535,7 +1535,7 @@ func TestNetlinkFailsBadInterface(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
 	cfg.IPSC.Interface = "nonexistent_iface_xyz"
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	err := s.netlink()
 	if err == nil {
@@ -1594,7 +1594,7 @@ func TestHandleMasterRegisterRequestTooShort(t *testing.T) {
 func TestHandlePacketReturnsPacket(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1234}
 	data := makeControlPacket(PacketType_RepeaterWakeUp, 12345)
@@ -1616,7 +1616,7 @@ func TestHandlePacketStripsAuthHash(t *testing.T) {
 	t.Parallel()
 	hexKey := "0000000000000000000000000000000000001234"
 	cfg := testConfig(true, "1234")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1234}
 	payload := makeControlPacket(PacketType_RepeaterWakeUp, 12345)
@@ -1637,7 +1637,7 @@ func TestHandlePacketStripsAuthHash(t *testing.T) {
 func TestErrPacketIgnoredIsSentinel(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(false, "")
-	s := NewIPSCServer(cfg)
+	s := NewIPSCServer(cfg, nil)
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
 	data := makeControlPacket(PacketType_MasterRegisterReply, 12345)

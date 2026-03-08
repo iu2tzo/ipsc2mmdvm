@@ -92,7 +92,7 @@ func TestStateConstants(t *testing.T) {
 func TestNewMMDVMClient(t *testing.T) {
 	t.Parallel()
 	cfg := testMMDVMConfig()
-	client := NewMMDVMClient(cfg)
+	client := NewMMDVMClient(cfg, nil)
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
@@ -363,7 +363,7 @@ func udpPair(t *testing.T) (*net.UDPConn, *MMDVMClient) {
 	cfg := testMMDVMConfig()
 	cfg.MasterServer = fmt.Sprintf("127.0.0.1:%d", srvAddr.Port)
 
-	client := NewMMDVMClient(cfg)
+	client := NewMMDVMClient(cfg, nil)
 	if err := client.connect(); err != nil {
 		serverConn.Close()
 		t.Fatalf("connect: %v", err)
@@ -406,7 +406,7 @@ func TestConnectBadAddress(t *testing.T) {
 	t.Parallel()
 	cfg := testMMDVMConfig()
 	cfg.MasterServer = "this-is-not-a-valid-address:::::999999"
-	client := NewMMDVMClient(cfg)
+	client := NewMMDVMClient(cfg, nil)
 
 	err := client.connect()
 	if err == nil {
@@ -1320,7 +1320,7 @@ func TestStartAndFullHandshake(t *testing.T) {
 	cfg := testMMDVMConfig()
 	cfg.MasterServer = fmt.Sprintf("127.0.0.1:%d", srvAddr.Port)
 
-	client := NewMMDVMClient(cfg)
+	client := NewMMDVMClient(cfg, nil)
 	client.keepAlive = 200 * time.Millisecond
 	client.timeout = 5 * time.Second
 

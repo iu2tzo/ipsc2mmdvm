@@ -1,15 +1,18 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"syscall"
 
 	"github.com/USA-RedDragon/configulator"
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/config"
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/ipsc"
+	"github.com/USA-RedDragon/ipsc2mmdvm/internal/metrics"
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm"
 	"github.com/USA-RedDragon/ipsc2mmdvm/internal/timeslot"
 	"github.com/lmittmann/tint"
@@ -59,13 +62,35 @@ func runRoot(cmd *cobra.Command, _ []string) error {
 	}
 	slog.SetDefault(logger)
 
+	// Create metrics and optionally start the metrics HTTP server.
+	var m *metrics.Metrics
+	var metricsSrv *http.Server
+	if cfg.Metrics.Enabled && cfg.Metrics.Address != "" {
+		m = metrics.NewMetrics()
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", m.Handler())
+		metricsSrv = &http.Server{
+			Addr:    cfg.Metrics.Address,
+			Handler: mux,
+		}
+		go func() {
+			slog.Info("Starting metrics server", "address", cfg.Metrics.Address)
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("Metrics server error", "error", err)
+			}
+		}()
+	}
+
 	// Create one MMDVM client per configured network (DMR master).
 	// All clients share a single outbound timeslot manager so that
 	// only one master can feed a given timeslot toward IPSC at a time.
 	outboundTSMgr := timeslot.NewManager()
+	if m != nil {
+		outboundTSMgr.SetMetrics(m, "outbound")
+	}
 	mmdvmClients := make([]*mmdvm.MMDVMClient, 0, len(cfg.MMDVM))
 	for i := range cfg.MMDVM {
-		client := mmdvm.NewMMDVMClient(&cfg.MMDVM[i])
+		client := mmdvm.NewMMDVMClient(&cfg.MMDVM[i], m)
 		client.SetOutboundTSManager(outboundTSMgr)
 		err = client.Start()
 		if err != nil {
@@ -74,7 +99,7 @@ func runRoot(cmd *cobra.Command, _ []string) error {
 		mmdvmClients = append(mmdvmClients, client)
 	}
 
-	ipscServer := ipsc.NewIPSCServer(cfg)
+	ipscServer := ipsc.NewIPSCServer(cfg, m)
 
 	ipscServer.SetBurstHandler(func(packetType byte, data []byte, addr *net.UDPAddr) {
 		for _, client := range mmdvmClients {
@@ -107,6 +132,12 @@ func runRoot(cmd *cobra.Command, _ []string) error {
 
 	stop := func(sig os.Signal) {
 		slog.Info("received signal, shutting down...", "signal", sig.String())
+
+		if metricsSrv != nil {
+			if err := metricsSrv.Shutdown(context.Background()); err != nil {
+				slog.Error("Error shutting down metrics server", "error", err)
+			}
+		}
 
 		ipscServer.Stop()
 		for _, client := range mmdvmClients {

@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net"
 	"regexp"
 
 	"github.com/vishvananda/netlink"
@@ -18,8 +19,14 @@ const (
 
 type Config struct {
 	LogLevel LogLevel `name:"log-level" description:"Logging level for the application. One of debug, info, warn, or error" default:"info"`
+	Metrics  Metrics  `name:"metrics" description:"Configuration for Prometheus metrics"`
 	MMDVM    []MMDVM  `name:"mmdvm" description:"Configuration for MMDVM clients (multiple DMR masters)"`
 	IPSC     IPSC     `name:"ipsc" description:"Configuration for the IPSC server"`
+}
+
+type Metrics struct {
+	Enabled bool   `name:"enabled" description:"Whether to enable Prometheus metrics endpoint"`
+	Address string `name:"address" description:"Address to serve Prometheus metrics on" default:":9100"`
 }
 
 // IPSC creates a virtual network interface and listens for IPSC packets on it.
@@ -128,6 +135,7 @@ var (
 	ErrInvalidIPSCIP            = errors.New("invalid IPSC IP address provided")
 	ErrInvalidIPSCSubnetMask    = errors.New("invalid IPSC subnet mask provided")
 	ErrInvalidIPSCAuthKey       = errors.New("invalid IPSC authentication key provided")
+	ErrInvalidMetricsAddress    = errors.New("invalid metrics address provided")
 )
 
 func (c Config) Validate() error {
@@ -135,6 +143,13 @@ func (c Config) Validate() error {
 	case LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError:
 	default:
 		return ErrInvalidLogLevel
+	}
+
+	if c.Metrics.Enabled && c.Metrics.Address != "" {
+		_, _, err := net.SplitHostPort(c.Metrics.Address)
+		if err != nil {
+			return ErrInvalidMetricsAddress
+		}
 	}
 
 	if len(c.MMDVM) == 0 {

@@ -8,9 +8,12 @@
 package timeslot
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/USA-RedDragon/ipsc2mmdvm/internal/metrics"
 )
 
 // DefaultTimeout is the duration after which an active call is considered
@@ -46,9 +49,11 @@ type slotState struct {
 //
 // Create one Manager per traffic direction that needs isolation.
 type Manager struct {
-	mu      sync.Mutex
-	slots   [2]*slotState // [0] = TS1 (Slot=false), [1] = TS2 (Slot=true)
-	timeout time.Duration
+	mu        sync.Mutex
+	slots     [2]*slotState // [0] = TS1 (Slot=false), [1] = TS2 (Slot=true)
+	timeout   time.Duration
+	metrics   *metrics.Metrics
+	direction string // "inbound" or "outbound" (for metric labels)
 }
 
 // NewManager creates a Manager with the default timeout.
@@ -58,12 +63,31 @@ func NewManager() *Manager {
 	}
 }
 
+// SetMetrics configures the metrics collector and direction label for this manager.
+func (m *Manager) SetMetrics(met *metrics.Metrics, direction string) {
+	m.metrics = met
+	m.direction = direction
+}
+
 // slotIndex converts the boolean Slot flag to an array index.
 func slotIndex(slot bool) int {
 	if slot {
 		return 1
 	}
 	return 0
+}
+
+// slotLabel returns a string label for metrics ("1" or "2").
+func slotLabel(slot bool) string {
+	if slot {
+		return "2"
+	}
+	return "1"
+}
+
+// slotLabelFromIndex returns a string label for metrics from an int index.
+func slotLabelFromIndex(idx int) string {
+	return fmt.Sprintf("%d", idx+1)
 }
 
 // getOrCreateSlot returns the slotState for idx, creating it if needed.
@@ -107,6 +131,9 @@ func (m *Manager) Submit(slot bool, streamID uint, network string, packet any) b
 			network:  network,
 			lastSeen: now,
 		}
+		if m.metrics != nil {
+			m.metrics.TimeslotActiveCalls.WithLabelValues(slotLabel(slot), m.direction).Set(1)
+		}
 		slog.Debug("timeslot acquired",
 			"slot", slot, "streamID", streamID, "network", network)
 		return true
@@ -125,6 +152,9 @@ func (m *Manager) Submit(slot bool, streamID uint, network string, packet any) b
 			"oldStream", ss.active.streamID, "oldNetwork", ss.active.network,
 			"newStream", streamID, "newNetwork", network,
 			"pendingDiscarded", len(ss.pending))
+		if m.metrics != nil {
+			m.metrics.TimeslotTimeouts.WithLabelValues(slotLabel(slot), m.direction).Inc()
+		}
 		// Discard stale pending streams and the timed-out active call.
 		ss.pending = nil
 		ss.active = &activeCall{
@@ -148,6 +178,9 @@ func (m *Manager) Submit(slot bool, streamID uint, network string, packet any) b
 			"pendingStream", streamID, "network", network)
 	}
 	ps.packets = append(ps.packets, packet)
+	if m.metrics != nil {
+		m.metrics.TimeslotPacketsBuffered.WithLabelValues(slotLabel(slot), m.direction).Inc()
+	}
 	return false
 }
 
@@ -172,6 +205,9 @@ func (m *Manager) Release(slot bool, streamID uint) []any {
 	if len(ss.pending) == 0 {
 		// No pending streams — slot is free.
 		ss.active = nil
+		if m.metrics != nil {
+			m.metrics.TimeslotActiveCalls.WithLabelValues(slotLabel(slot), m.direction).Set(0)
+		}
 		return nil
 	}
 

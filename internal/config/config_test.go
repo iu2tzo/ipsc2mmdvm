@@ -279,3 +279,33 @@ func TestLogLevelConstants(t *testing.T) {
 		t.Fatalf("expected 'error', got %q", LogLevelError)
 	}
 }
+
+func TestValidateMetricsAddress(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		addr    string
+		wantErr bool
+	}{
+		{"default port only", ":9100", false},
+		{"host and port", "0.0.0.0:9100", false},
+		{"localhost", "127.0.0.1:2112", false},
+		{"empty disables", "", false},
+		{"missing port", "localhost", true},
+		{"invalid format", ":::bad", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := validConfig()
+			c.Metrics.Address = tt.addr
+			err := c.Validate()
+			if tt.wantErr && !errors.Is(err, ErrInvalidMetricsAddress) {
+				t.Fatalf("expected %v, got %v", ErrInvalidMetricsAddress, err)
+			}
+			if !tt.wantErr && errors.Is(err, ErrInvalidMetricsAddress) {
+				t.Fatalf("did not expect %v, got %v", ErrInvalidMetricsAddress, err)
+			}
+		})
+	}
+}
