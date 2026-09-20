@@ -51,7 +51,7 @@ func (h *MMDVMClient) sendRPTC() {
 	str = append(str, []byte(fmt.Sprintf("%-19s", h.cfg.Description))...)         // 78:97
 	str = append(str, []byte(fmt.Sprintf("%d", slots))...)                        // 97:98
 	str = append(str, []byte(fmt.Sprintf("%-124s", h.cfg.URL))...)                // 98:222
-	str = append(str, []byte(fmt.Sprintf("%-40s", "20210921"))...)                // 222:262
+	str = append(str, []byte(fmt.Sprintf("%-40s", "20260920"))...)                // 222:262
 	str = append(str, []byte(fmt.Sprintf("%-40s", "MMDVM_MMDVM_HS_Dual_Hat"))...) // 262:302
 
 	h.connTX <- str

@@ -18,15 +18,15 @@ const (
 )
 
 type Config struct {
-	LogLevel LogLevel `name:"log-level" description:"Logging level for the application. One of debug, info, warn, or error" default:"info"`
-	Metrics  Metrics  `name:"metrics" description:"Configuration for Prometheus metrics"`
-	MMDVM    []MMDVM  `name:"mmdvm" description:"Configuration for MMDVM clients (multiple DMR masters)"`
-	IPSC     IPSC     `name:"ipsc" description:"Configuration for the IPSC server"`
+	LogLevel LogLevel `name:"log-level" yaml:"log-level" description:"Logging level for the application. One of debug, info, warn, or error" default:"info"`
+	Metrics  Metrics  `name:"metrics" yaml:"metrics" description:"Configuration for Prometheus metrics"`
+	MMDVM    []MMDVM  `name:"mmdvm" yaml:"mmdvm" description:"Configuration for MMDVM clients (multiple DMR masters)"`
+	IPSC     IPSC     `name:"ipsc" yaml:"ipsc" description:"Configuration for the IPSC server"`
 }
 
 type Metrics struct {
-	Enabled bool   `name:"enabled" description:"Whether to enable Prometheus metrics endpoint"`
-	Address string `name:"address" description:"Address to serve Prometheus metrics on" default:":9100"`
+	Enabled bool   `name:"enabled" yaml:"enabled" description:"Whether to enable Prometheus metrics endpoint"`
+	Address string `name:"address" yaml:"address" description:"Address to serve Prometheus metrics on" default:":9100"`
 }
 
 // IPSC configures how the IPSC server listens for repeater traffic.
@@ -51,11 +51,11 @@ type Metrics struct {
 // "interface explicitly set", which is exactly the distinction Mode()
 // needs to make between the three listed modes.
 type IPSC struct {
-	Interface  string   `name:"interface" description:"Interface to listen for IPSC packets on. Leave empty to listen on all interfaces (ip=0.0.0.0/empty) or to bind to a specific interface without managing its address (ip=0.0.0.0/empty + interface set)"`
-	Port       uint16   `name:"port" description:"Port to listen for IPSC packets on"`
-	IP         string   `name:"ip" description:"IP address to assign to the interface (managed mode), or \"0.0.0.0\"/empty to listen without managing addressing"`
-	SubnetMask int      `name:"subnet-mask" description:"Subnet mask for the virtual network interface created for IPSC packets (managed mode only)" default:"24"`
-	Auth       IPSCAuth `name:"auth" description:"Authentication configuration for the IPSC server"`
+	Interface  string   `name:"interface" yaml:"interface" description:"Interface to listen for IPSC packets on. Leave empty to listen on all interfaces (ip=0.0.0.0/empty) or to bind to a specific interface without managing its address (ip=0.0.0.0/empty + interface set)"`
+	Port       uint16   `name:"port" yaml:"port" description:"Port to listen for IPSC packets on"`
+	IP         string   `name:"ip" yaml:"ip" description:"IP address to assign to the interface (managed mode), or \"0.0.0.0\"/empty to listen without managing addressing"`
+	SubnetMask int      `name:"subnet-mask" yaml:"subnet-mask" description:"Subnet mask for the virtual network interface created for IPSC packets (managed mode only)" default:"24"`
+	Auth       IPSCAuth `name:"auth" yaml:"auth" description:"Authentication configuration for the IPSC server"`
 }
 
 // IPSCMode identifies how the IPSC server should open its listening
@@ -102,83 +102,83 @@ func (c IPSC) Mode() IPSCMode {
 }
 
 type IPSCAuth struct {
-	Enabled bool   `name:"enabled" description:"Whether to require authentication for IPSC clients"`
-	Key     string `name:"key" description:"Authentication key for IPSC clients. Required if auth is enabled"`
+	Enabled bool   `name:"enabled" yaml:"enabled" description:"Whether to require authentication for IPSC clients"`
+	Key     string `name:"key" yaml:"key" description:"Authentication key for IPSC clients. Required if auth is enabled"`
 }
 
 type MMDVM struct {
-	Name     string `name:"name" description:"Name for this MMDVM network (used in logging)"`
-	Callsign string `name:"callsign" description:"Callsign to use for the MMDVM connection"`
-	ID       uint32 `name:"radio-id" description:"Radio ID for the MMDVM connection"`
+	Name     string `name:"name" yaml:"name" description:"Name for this MMDVM network (used in logging)"`
+	Callsign string `name:"callsign" yaml:"callsign" description:"Callsign to use for the MMDVM connection"`
+	ID       uint32 `name:"radio-id" yaml:"radio-id" description:"Radio ID for the MMDVM connection"`
 	// RXFreq is in Hz
-	RXFreq uint `name:"rx-freq" description:"Receive frequency in Hz for the MMDVM connection"`
+	RXFreq uint `name:"rx-freq" yaml:"rx-freq" description:"Receive frequency in Hz for the MMDVM connection"`
 	// TXFreq is in Hz
-	TXFreq uint `name:"tx-freq" description:"Transmit frequency in Hz for the MMDVM connection"`
+	TXFreq uint `name:"tx-freq" yaml:"tx-freq" description:"Transmit frequency in Hz for the MMDVM connection"`
 	// TXPower is in dBm
-	TXPower uint8 `name:"tx-power" description:"Transmit power in dBm for the MMDVM connection"`
+	TXPower uint8 `name:"tx-power" yaml:"tx-power" description:"Transmit power in dBm for the MMDVM connection"`
 	// ColorCode is the DMR color code
-	ColorCode uint8 `name:"color-code" description:"DMR color code for the MMDVM connection"`
+	ColorCode uint8 `name:"color-code" yaml:"color-code" description:"DMR color code for the MMDVM connection"`
 	// Latitude with north as positive [-90,+90]
-	Latitude float64 `name:"latitude" description:"Latitude with north as positive [-90,+90] for the MMDVM connection"`
+	Latitude float64 `name:"latitude" yaml:"latitude" description:"Latitude with north as positive [-90,+90] for the MMDVM connection"`
 	// Longitude with east as positive [-180+,180]
-	Longitude float64 `name:"longitude" description:"Longitude with east as positive [-180+,180] for the MMDVM connection"`
+	Longitude float64 `name:"longitude" yaml:"longitude" description:"Longitude with east as positive [-180+,180] for the MMDVM connection"`
 	// Height in meters
-	Height       uint16 `name:"height" description:"Height in meters for the MMDVM connection"`
-	Location     string `name:"location" description:"Location for the MMDVM connection"`
-	Description  string `name:"description" description:"Description for the MMDVM connection"`
-	URL          string `name:"url" description:"URL for the MMDVM connection"`
-	Slots        byte   `name:"slots" description:"Active timeslots bitmask (1=TS1, 2=TS2, 3=both)" default:"3"`
-	MasterServer string `name:"master-server" description:"Master server for the MMDVM connection"`
-	Password     string `name:"password" description:"Password for the MMDVM connection"`
+	Height       uint16 `name:"height" yaml:"height" description:"Height in meters for the MMDVM connection"`
+	Location     string `name:"location" yaml:"location" description:"Location for the MMDVM connection"`
+	Description  string `name:"description" yaml:"description" description:"Description for the MMDVM connection"`
+	URL          string `name:"url" yaml:"url" description:"URL for the MMDVM connection"`
+	Slots        byte   `name:"slots" yaml:"slots" description:"Active timeslots bitmask (1=TS1, 2=TS2, 3=both)" default:"3"`
+	MasterServer string `name:"master-server" yaml:"master-server" description:"Master server for the MMDVM connection"`
+	Password     string `name:"password" yaml:"password" description:"Password for the MMDVM connection"`
 
 	// Rewrite rules for routing DMR data to/from this network.
-	TGRewrites   []TGRewriteConfig   `name:"tg-rewrite" description:"Talkgroup rewrite rules"`
-	PCRewrites   []PCRewriteConfig   `name:"pc-rewrite" description:"Private call rewrite rules"`
-	TypeRewrites []TypeRewriteConfig `name:"type-rewrite" description:"Type rewrite rules (group TG to private call)"`
-	SrcRewrites  []SrcRewriteConfig  `name:"src-rewrite" description:"Source rewrite rules (private call by source to group TG)"`
+	TGRewrites   []TGRewriteConfig   `name:"tg-rewrite" yaml:"tg-rewrite" description:"Talkgroup rewrite rules"`
+	PCRewrites   []PCRewriteConfig   `name:"pc-rewrite" yaml:"pc-rewrite" description:"Private call rewrite rules"`
+	TypeRewrites []TypeRewriteConfig `name:"type-rewrite" yaml:"type-rewrite" description:"Type rewrite rules (group TG to private call)"`
+	SrcRewrites  []SrcRewriteConfig  `name:"src-rewrite" yaml:"src-rewrite" description:"Source rewrite rules (private call by source to group TG)"`
 
 	// PassAll rules allow all traffic of a given type on a slot without rewriting.
-	PassAllPC []int `name:"pass-all-pc" description:"Timeslots on which all private calls pass through unchanged (e.g. [1, 2])"`
-	PassAllTG []int `name:"pass-all-tg" description:"Timeslots on which all group calls pass through unchanged (e.g. [1, 2])"`
+	PassAllPC []int `name:"pass-all-pc" yaml:"pass-all-pc" description:"Timeslots on which all private calls pass through unchanged (e.g. [1, 2])"`
+	PassAllTG []int `name:"pass-all-tg" yaml:"pass-all-tg" description:"Timeslots on which all group calls pass through unchanged (e.g. [1, 2])"`
 }
 
 // TGRewriteConfig maps group TG calls from one slot/TG to another.
 // Modeled after DMRGateway's TGRewrite: fromSlot, fromTG, toSlot, toTG, range.
 type TGRewriteConfig struct {
-	FromSlot uint `name:"from-slot" description:"Source timeslot (1 or 2)"`
-	FromTG   uint `name:"from-tg" description:"Source talkgroup start"`
-	ToSlot   uint `name:"to-slot" description:"Destination timeslot (1 or 2)"`
-	ToTG     uint `name:"to-tg" description:"Destination talkgroup start"`
-	Range    uint `name:"range" description:"Number of contiguous TGs to map" default:"1"`
+	FromSlot uint `name:"from-slot" yaml:"from-slot" description:"Source timeslot (1 or 2)"`
+	FromTG   uint `name:"from-tg" yaml:"from-tg" description:"Source talkgroup start"`
+	ToSlot   uint `name:"to-slot" yaml:"to-slot" description:"Destination timeslot (1 or 2)"`
+	ToTG     uint `name:"to-tg" yaml:"to-tg" description:"Destination talkgroup start"`
+	Range    uint `name:"range" yaml:"range" description:"Number of contiguous TGs to map" default:"1"`
 }
 
 // PCRewriteConfig maps private calls from one slot/ID to another.
 // Modeled after DMRGateway's PCRewrite: fromSlot, fromId, toSlot, toId, range.
 type PCRewriteConfig struct {
-	FromSlot uint `name:"from-slot" description:"Source timeslot (1 or 2)"`
-	FromID   uint `name:"from-id" description:"Source private call ID start"`
-	ToSlot   uint `name:"to-slot" description:"Destination timeslot (1 or 2)"`
-	ToID     uint `name:"to-id" description:"Destination private call ID start"`
-	Range    uint `name:"range" description:"Number of contiguous IDs to map" default:"1"`
+	FromSlot uint `name:"from-slot" yaml:"from-slot" description:"Source timeslot (1 or 2)"`
+	FromID   uint `name:"from-id" yaml:"from-id" description:"Source private call ID start"`
+	ToSlot   uint `name:"to-slot" yaml:"to-slot" description:"Destination timeslot (1 or 2)"`
+	ToID     uint `name:"to-id" yaml:"to-id" description:"Destination private call ID start"`
+	Range    uint `name:"range" yaml:"range" description:"Number of contiguous IDs to map" default:"1"`
 }
 
 // TypeRewriteConfig converts group TG calls to private calls.
 // Modeled after DMRGateway's TypeRewrite: fromSlot, fromTG, toSlot, toId, range.
 type TypeRewriteConfig struct {
-	FromSlot uint `name:"from-slot" description:"Source timeslot (1 or 2)"`
-	FromTG   uint `name:"from-tg" description:"Source talkgroup start"`
-	ToSlot   uint `name:"to-slot" description:"Destination timeslot (1 or 2)"`
-	ToID     uint `name:"to-id" description:"Destination private call ID start"`
-	Range    uint `name:"range" description:"Number of contiguous entries to map" default:"1"`
+	FromSlot uint `name:"from-slot" yaml:"from-slot" description:"Source timeslot (1 or 2)"`
+	FromTG   uint `name:"from-tg" yaml:"from-tg" description:"Source talkgroup start"`
+	ToSlot   uint `name:"to-slot" yaml:"to-slot" description:"Destination timeslot (1 or 2)"`
+	ToID     uint `name:"to-id" yaml:"to-id" description:"Destination private call ID start"`
+	Range    uint `name:"range" yaml:"range" description:"Number of contiguous entries to map" default:"1"`
 }
 
 // SrcRewriteConfig matches calls by source ID and remaps the source into a prefixed range.
 type SrcRewriteConfig struct {
-	FromSlot uint `name:"from-slot" description:"Source timeslot (1 or 2)"`
-	FromID   uint `name:"from-id" description:"Source ID start"`
-	ToSlot   uint `name:"to-slot" description:"Destination timeslot (1 or 2)"`
-	ToID     uint `name:"to-id" description:"Destination source ID start"`
-	Range    uint `name:"range" description:"Number of contiguous source IDs to match" default:"1"`
+	FromSlot uint `name:"from-slot" yaml:"from-slot" description:"Source timeslot (1 or 2)"`
+	FromID   uint `name:"from-id" yaml:"from-id" description:"Source ID start"`
+	ToSlot   uint `name:"to-slot" yaml:"to-slot" description:"Destination timeslot (1 or 2)"`
+	ToID     uint `name:"to-id" yaml:"to-id" description:"Destination source ID start"`
+	Range    uint `name:"range" yaml:"range" description:"Number of contiguous source IDs to match" default:"1"`
 }
 
 var (

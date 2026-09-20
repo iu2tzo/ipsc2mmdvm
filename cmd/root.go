@@ -9,7 +9,6 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/iu2tzo/configulator"
 	"github.com/iu2tzo/ipsc2mmdvm/internal/config"
 	"github.com/iu2tzo/ipsc2mmdvm/internal/ipsc"
 	"github.com/iu2tzo/ipsc2mmdvm/internal/metrics"
@@ -32,19 +31,14 @@ func NewCommand(version, commit string) *cobra.Command {
 		SilenceErrors:     true,
 		DisableAutoGenTag: true,
 	}
+	config.RegisterFlags(cmd.Flags(), "config.yaml")
 	return cmd
 }
 
 func runRoot(cmd *cobra.Command, _ []string) error {
-	ctx := cmd.Context()
 	fmt.Printf("ipsc2mmdvm - %s (%s)\n", cmd.Annotations["version"], cmd.Annotations["commit"])
 
-	c, err := configulator.FromContext[config.Config](ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get config from context")
-	}
-
-	cfg, err := c.Load()
+	cfg, err := config.Load(cmd.Flags(), "config.yaml")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
