@@ -1,10 +1,10 @@
-module github.com/USA-RedDragon/ipsc2mmdvm
+module github.com/iu2tzo/ipsc2mmdvm
 
 go 1.25.7
 
 require (
-	github.com/USA-RedDragon/configulator v0.0.4
-	github.com/USA-RedDragon/dmrgo v0.0.1
+	github.com/iu2tzo/configulator v0.0.4
+	github.com/iu2tzo/dmrgo v0.0.1
 	github.com/lmittmann/tint v1.1.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2

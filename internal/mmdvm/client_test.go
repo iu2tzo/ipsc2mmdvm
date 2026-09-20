@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/config"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/ipsc"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/rewrite"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/config"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/ipsc"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/mmdvm/proto"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/mmdvm/rewrite"
 )
 
 // Test protocol tag constants to avoid goconst warnings.

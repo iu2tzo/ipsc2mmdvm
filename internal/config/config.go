@@ -29,13 +29,76 @@ type Metrics struct {
 	Address string `name:"address" description:"Address to serve Prometheus metrics on" default:":9100"`
 }
 
-// IPSC creates a virtual network interface and listens for IPSC packets on it.
+// IPSC configures how the IPSC server listens for repeater traffic.
+// Depending on which fields are set, it operates in one of three modes
+// (see Mode()):
+//
+//   - Managed: interface + a real ip (not "0.0.0.0"/empty) are both set.
+//     The interface's addressing is fully managed via netlink (existing
+//     addresses removed, ip/subnet-mask assigned, link brought up). This
+//     is the original behaviour, for a repeater on a dedicated/direct
+//     link.
+//
+//   - Any: ip is "0.0.0.0" or empty, and interface is empty. Listens on
+//     the configured port on every interface, no address management.
+//
+//   - BindDevice: ip is "0.0.0.0" or empty, and interface is set. Binds
+//     the listening socket to that specific interface (SO_BINDTODEVICE)
+//     without touching its existing address(es).
+//
+// NOTE: ip intentionally has no default value. A default here would
+// make "interface omitted from the config file" indistinguishable from
+// "interface explicitly set", which is exactly the distinction Mode()
+// needs to make between the three listed modes.
 type IPSC struct {
-	Interface  string   `name:"interface" description:"Interface to listen for IPSC packets on"`
+	Interface  string   `name:"interface" description:"Interface to listen for IPSC packets on. Leave empty to listen on all interfaces (ip=0.0.0.0/empty) or to bind to a specific interface without managing its address (ip=0.0.0.0/empty + interface set)"`
 	Port       uint16   `name:"port" description:"Port to listen for IPSC packets on"`
-	IP         string   `name:"ip" description:"IP address to listen for IPSC packets on" default:"10.10.250.1"`
-	SubnetMask int      `name:"subnet-mask" description:"Subnet mask for the virtual network interface created for IPSC packets" default:"24"`
+	IP         string   `name:"ip" description:"IP address to assign to the interface (managed mode), or \"0.0.0.0\"/empty to listen without managing addressing"`
+	SubnetMask int      `name:"subnet-mask" description:"Subnet mask for the virtual network interface created for IPSC packets (managed mode only)" default:"24"`
 	Auth       IPSCAuth `name:"auth" description:"Authentication configuration for the IPSC server"`
+}
+
+// IPSCMode identifies how the IPSC server should open its listening
+// socket, derived from IPSC.Interface / IPSC.IP. Shared by
+// config.Validate() and ipsc.IPSCServer.Start() so both always agree on
+// what a given configuration means.
+type IPSCMode int
+
+const (
+	// IPSCModeInvalid: the combination of fields doesn't map to any
+	// supported mode (e.g. a specific ip given without an interface to
+	// assign it to).
+	IPSCModeInvalid IPSCMode = iota
+
+	// IPSCModeManaged: interface + a real ip set -> full netlink-managed
+	// addressing (original/legacy behaviour, direct-cable repeater).
+	IPSCModeManaged
+
+	// IPSCModeAny: no interface, no specific ip -> listen on the
+	// configured port on every interface.
+	IPSCModeAny
+
+	// IPSCModeBindDevice: interface set, no specific ip -> bind the
+	// socket to that interface (SO_BINDTODEVICE), address untouched.
+	IPSCModeBindDevice
+)
+
+// Mode derives the IPSC listening mode from Interface and IP.
+func (c IPSC) Mode() IPSCMode {
+	anyIP := c.IP == "" || c.IP == "0.0.0.0"
+
+	switch {
+	case c.Interface != "" && !anyIP:
+		return IPSCModeManaged
+	case c.Interface != "" && anyIP:
+		return IPSCModeBindDevice
+	case c.Interface == "" && anyIP:
+		return IPSCModeAny
+	default:
+		// c.Interface == "" && !anyIP: a specific ip with nothing to
+		// assign it to. Ambiguous, rejected by Validate().
+		return IPSCModeInvalid
+	}
 }
 
 type IPSCAuth struct {
@@ -134,8 +197,14 @@ var (
 	ErrInvalidIPSCInterface     = errors.New("invalid IPSC interface provided")
 	ErrInvalidIPSCIP            = errors.New("invalid IPSC IP address provided")
 	ErrInvalidIPSCSubnetMask    = errors.New("invalid IPSC subnet mask provided")
-	ErrInvalidIPSCAuthKey       = errors.New("invalid IPSC authentication key provided")
-	ErrInvalidMetricsAddress    = errors.New("invalid metrics address provided")
+	ErrInvalidIPSCPort          = errors.New("invalid IPSC port provided")
+	ErrInvalidIPSCConfiguration = errors.New(
+		"ambiguous IPSC configuration: use interface+ip for managed mode, " +
+			"ip=\"0.0.0.0\"/empty alone to listen on all interfaces, " +
+			"or interface alone (ip empty) to bind to that interface",
+	)
+	ErrInvalidIPSCAuthKey    = errors.New("invalid IPSC authentication key provided")
+	ErrInvalidMetricsAddress = errors.New("invalid metrics address provided")
 )
 
 func (c Config) Validate() error {
@@ -199,30 +268,45 @@ func (c Config) Validate() error {
 		}
 	}
 
-	if c.IPSC.Interface == "" {
-		return ErrInvalidIPSCInterface
+	if c.IPSC.Port == 0 {
+		return ErrInvalidIPSCPort
 	}
 
-	_, err := netlink.LinkByName(c.IPSC.Interface)
-	if err != nil {
-		return ErrInvalidIPSCInterface
-	}
+	switch c.IPSC.Mode() {
+	case IPSCModeManaged:
+		if _, err := netlink.LinkByName(c.IPSC.Interface); err != nil {
+			return ErrInvalidIPSCInterface
+		}
+		if net.ParseIP(c.IPSC.IP) == nil {
+			return ErrInvalidIPSCIP
+		}
+		if c.IPSC.SubnetMask < 1 || c.IPSC.SubnetMask > 32 {
+			return ErrInvalidIPSCSubnetMask
+		}
 
-	if c.IPSC.IP == "" {
-		return ErrInvalidIPSCIP
-	}
+	case IPSCModeBindDevice:
+		// No address management: still verify that the given interface
+		// actually exists, so a typo isn't only discovered when the
+		// listener starts.
+		if _, err := netlink.LinkByName(c.IPSC.Interface); err != nil {
+			return ErrInvalidIPSCInterface
+		}
 
-	if c.IPSC.SubnetMask < 1 || c.IPSC.SubnetMask > 32 {
-		return ErrInvalidIPSCSubnetMask
+	case IPSCModeAny:
+		// No interface, no specific IP: listen everywhere, nothing to
+		// check beyond the port (already done above).
+
+	default: // IPSCModeInvalid
+		return ErrInvalidIPSCConfiguration
 	}
 
 	if c.IPSC.Auth.Enabled && c.IPSC.Auth.Key == "" {
 		return ErrInvalidIPSCAuthKey
 	}
 
-	// Check authkey is [0-9a-fA-F]{0,40} if c.IPSC.Auth.Enabled {
-	regexp := regexp.MustCompile(`^[0-9a-fA-F]{0,40}$`)
-	if !regexp.MatchString(c.IPSC.Auth.Key) {
+	// Check authkey is [0-9a-fA-F]{0,40}
+	authKeyRegexp := regexp.MustCompile(`^[0-9a-fA-F]{0,40}$`)
+	if !authKeyRegexp.MatchString(c.IPSC.Auth.Key) {
 		return ErrInvalidIPSCAuthKey
 	}
 

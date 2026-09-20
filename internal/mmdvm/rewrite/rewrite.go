@@ -9,7 +9,7 @@
 package rewrite
 
 import (
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/mmdvm/proto"
 )
 
 // Result indicates the outcome of applying a rewrite rule.

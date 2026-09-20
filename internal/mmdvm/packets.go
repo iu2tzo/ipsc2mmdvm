@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/mmdvm/proto"
 )
 
 func (h *MMDVMClient) sendLogin() {

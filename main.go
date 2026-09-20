@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/USA-RedDragon/configulator"
-	"github.com/USA-RedDragon/ipsc2mmdvm/cmd"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/config"
+	"github.com/iu2tzo/configulator"
+	"github.com/iu2tzo/ipsc2mmdvm/cmd"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/config"
 )
 
 // https://goreleaser.com/cookbooks/using-main.version/

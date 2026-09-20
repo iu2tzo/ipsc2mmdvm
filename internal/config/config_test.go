@@ -190,13 +190,102 @@ func TestValidateMMDVMPassword(t *testing.T) {
 	}
 }
 
-func TestValidateIPSCInterface(t *testing.T) {
+func TestIPSCMode(t *testing.T) {
 	t.Parallel()
+	tests := []struct {
+		name     string
+		interfac string
+		ip       string
+		wantMode IPSCMode
+	}{
+		{"managed: interface + real ip", "eth0", "10.10.250.1", IPSCModeManaged},
+		{"any: no interface, no ip", "", "", IPSCModeAny},
+		{"any: no interface, explicit 0.0.0.0", "", "0.0.0.0", IPSCModeAny},
+		{"bind-device: interface, empty ip", "wg0", "", IPSCModeBindDevice},
+		{"bind-device: interface, explicit 0.0.0.0", "wg0", "0.0.0.0", IPSCModeBindDevice},
+		{"invalid: ip without interface", "", "10.10.250.1", IPSCModeInvalid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := IPSC{Interface: tt.interfac, IP: tt.ip}
+			if got := c.Mode(); got != tt.wantMode {
+				t.Fatalf("expected mode %v, got %v", tt.wantMode, got)
+			}
+		})
+	}
+}
+
+func TestValidateIPSCInterfaceManagedMode(t *testing.T) {
+	t.Parallel()
+	// interface + ip both set (Managed mode): a nonexistent
+	// interface must still be rejected.
 	c := validConfig()
-	c.IPSC.Interface = ""
+	c.IPSC.Interface = "this-interface-does-not-exist-hopefully"
 	err := c.Validate()
 	if !errors.Is(err, ErrInvalidIPSCInterface) {
 		t.Fatalf("expected %v, got %v", ErrInvalidIPSCInterface, err)
+	}
+}
+
+func TestValidateIPSCAnyMode(t *testing.T) {
+	t.Parallel()
+	// Neither interface nor ip: listen everywhere, no error expected
+	// from this part of validation.
+	c := validConfig()
+	c.IPSC.Interface = ""
+	c.IPSC.IP = ""
+	err := c.Validate()
+	if errors.Is(err, ErrInvalidIPSCInterface) || errors.Is(err, ErrInvalidIPSCIP) ||
+		errors.Is(err, ErrInvalidIPSCSubnetMask) || errors.Is(err, ErrInvalidIPSCConfiguration) {
+		t.Fatalf("did not expect an IPSC validation error in Any mode, got %v", err)
+	}
+}
+
+func TestValidateIPSCBindDeviceMode(t *testing.T) {
+	t.Parallel()
+	// Interface set, ip empty: bind to the interface only.
+	// "lo" exists on any Linux host.
+	c := validConfig()
+	c.IPSC.Interface = "lo"
+	c.IPSC.IP = ""
+	err := c.Validate()
+	if errors.Is(err, ErrInvalidIPSCInterface) || errors.Is(err, ErrInvalidIPSCConfiguration) {
+		t.Fatalf("did not expect an IPSC validation error in BindDevice mode, got %v", err)
+	}
+}
+
+func TestValidateIPSCBindDeviceModeMissingInterface(t *testing.T) {
+	t.Parallel()
+	c := validConfig()
+	c.IPSC.Interface = "this-interface-does-not-exist-hopefully"
+	c.IPSC.IP = ""
+	err := c.Validate()
+	if !errors.Is(err, ErrInvalidIPSCInterface) {
+		t.Fatalf("expected %v, got %v", ErrInvalidIPSCInterface, err)
+	}
+}
+
+func TestValidateIPSCInvalidConfiguration(t *testing.T) {
+	t.Parallel()
+	// Specific IP without an interface to assign it to: ambiguous
+	// combination, must be explicitly rejected.
+	c := validConfig()
+	c.IPSC.Interface = ""
+	c.IPSC.IP = "10.10.250.1"
+	err := c.Validate()
+	if !errors.Is(err, ErrInvalidIPSCConfiguration) {
+		t.Fatalf("expected %v, got %v", ErrInvalidIPSCConfiguration, err)
+	}
+}
+
+func TestValidateIPSCPort(t *testing.T) {
+	t.Parallel()
+	c := validConfig()
+	c.IPSC.Port = 0
+	err := c.Validate()
+	if !errors.Is(err, ErrInvalidIPSCPort) {
+		t.Fatalf("expected %v, got %v", ErrInvalidIPSCPort, err)
 	}
 }
 

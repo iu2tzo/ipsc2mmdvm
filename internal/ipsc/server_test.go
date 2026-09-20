@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/config"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/config"
 )
 
 func testConfig(authEnabled bool, authKey string) *config.Config {

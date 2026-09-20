@@ -1,6 +1,6 @@
 # ipsc2mmdvm
 
-[![Release](https://github.com/USA-RedDragon/ipsc2mmdvm/actions/workflows/release.yaml/badge.svg)](https://github.com/USA-RedDragon/ipsc2mmdvm/actions/workflows/release.yaml) [![go.mod version](https://img.shields.io/github/go-mod/go-version/USA-RedDragon/ipsc2mmdvm.svg)](https://github.com/USA-RedDragon/ipsc2mmdvm) [![GoReportCard](https://goreportcard.com/badge/github.com/USA-RedDragon/ipsc2mmdvm)](https://goreportcard.com/report/github.com/USA-RedDragon/ipsc2mmdvm) [![License](https://badgen.net/github/license/USA-RedDragon/ipsc2mmdvm)](https://github.com/USA-RedDragon/ipsc2mmdvm/blob/main/LICENSE) [![Release](https://img.shields.io/github/release/USA-RedDragon/ipsc2mmdvm.svg)](https://github.com/USA-RedDragon/ipsc2mmdvm/releases/) [![codecov](https://codecov.io/gh/USA-RedDragon/ipsc2mmdvm/graph/badge.svg?token=NHCyRaZGG9)](https://codecov.io/gh/USA-RedDragon/ipsc2mmdvm)
+[![Release](https://github.com/iu2tzo/ipsc2mmdvm/actions/workflows/release.yaml/badge.svg)](https://github.com/iu2tzo/ipsc2mmdvm/actions/workflows/release.yaml) [![go.mod version](https://img.shields.io/github/go-mod/go-version/iu2tzo/ipsc2mmdvm.svg)](https://github.com/iu2tzo/ipsc2mmdvm) [![GoReportCard](https://goreportcard.com/badge/github.com/iu2tzo/ipsc2mmdvm)](https://goreportcard.com/report/github.com/iu2tzo/ipsc2mmdvm) [![License](https://badgen.net/github/license/iu2tzo/ipsc2mmdvm)](https://github.com/iu2tzo/ipsc2mmdvm/blob/main/LICENSE) [![Release](https://img.shields.io/github/release/iu2tzo/ipsc2mmdvm.svg)](https://github.com/iu2tzo/ipsc2mmdvm/releases/) [![codecov](https://codecov.io/gh/iu2tzo/ipsc2mmdvm/graph/badge.svg?token=NHCyRaZGG9)](https://codecov.io/gh/iu2tzo/ipsc2mmdvm)
 
 **Connect your Motorola IPSC repeater to MMDVM DMR Masters.**
 
@@ -29,7 +29,7 @@ Your repeater connects directly via Ethernet cable to the box running ipsc2mmdvm
 
 ### 1. Download ipsc2mmdvm
 
-Download the latest release tarball for your platform from the [GitHub Releases](https://github.com/USA-RedDragon/ipsc2mmdvm/releases/latest) page. For a Raspberry Pi, grab the [`linux_arm64`](https://github.com/USA-RedDragon/ipsc2mmdvm/releases/latest) build, for desktop Linux use [`linux_amd64`](https://github.com/USA-RedDragon/ipsc2mmdvm/releases/latest). Extract it and move the binary to your PATH:
+Download the latest release tarball for your platform from the [GitHub Releases](https://github.com/iu2tzo/ipsc2mmdvm/releases/latest) page. For a Raspberry Pi, grab the [`linux_arm64`](https://github.com/iu2tzo/ipsc2mmdvm/releases/latest) build, for desktop Linux use [`linux_amd64`](https://github.com/iu2tzo/ipsc2mmdvm/releases/latest). Extract it and move the binary to your PATH:
 
 ```bash
 tar xzf ipsc2mmdvm_*_linux_arm64.tar.gz
@@ -41,7 +41,7 @@ sudo mv ipsc2mmdvm /usr/local/bin/ipsc2mmdvm
 Download the example config, edit it, then move it into place:
 
 ```bash
-wget https://raw.githubusercontent.com/USA-RedDragon/ipsc2mmdvm/main/config.example.yaml -O ipsc2mmdvm.yaml
+wget https://raw.githubusercontent.com/iu2tzo/ipsc2mmdvm/main/config.example.yaml -O ipsc2mmdvm.yaml
 nano ipsc2mmdvm.yaml
 sudo mv ipsc2mmdvm.yaml /etc/ipsc2mmdvm.yaml
 ```

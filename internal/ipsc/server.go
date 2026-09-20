@@ -1,6 +1,7 @@
 package ipsc
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha1" //nolint:gosec
 	"encoding/binary"
@@ -12,11 +13,13 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/config"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/metrics"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/config"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/metrics"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 type IPSCServer struct {
@@ -108,24 +111,89 @@ func NewIPSCServer(cfg *config.Config, m *metrics.Metrics) *IPSCServer {
 	}
 }
 
+// Start opens the IPSC listener according to the mode derived from
+// cfg.IPSC (see config.IPSC.Mode). Callers are expected to have already
+// run config.Config.Validate() beforehand.
 func (s *IPSCServer) Start() error {
-	if err := s.netlink(); err != nil {
-		return fmt.Errorf("error configuring network: %w", err)
-	}
+	switch s.cfg.IPSC.Mode() {
+	case config.IPSCModeManaged:
+		if err := s.netlink(); err != nil {
+			return fmt.Errorf("error configuring network: %w", err)
+		}
+		return s.listenOnIP(s.cfg.IPSC.IP, s.cfg.IPSC.Port)
 
-	var err error
-	s.udp, err = net.ListenUDP("udp", &net.UDPAddr{
-		IP:   net.ParseIP(s.cfg.IPSC.IP),
-		Port: int(s.cfg.IPSC.Port),
+	case config.IPSCModeBindDevice:
+		return s.listenOnInterface(s.cfg.IPSC.Interface, s.cfg.IPSC.Port)
+
+	case config.IPSCModeAny:
+		return s.listenOnIP("0.0.0.0", s.cfg.IPSC.Port)
+
+	default: // config.IPSCModeInvalid
+		// Shouldn't happen if Validate() was called before Start(),
+		// but keep it as a safety net.
+		return fmt.Errorf("invalid IPSC configuration: interface=%q ip=%q",
+			s.cfg.IPSC.Interface, s.cfg.IPSC.IP)
+	}
+}
+
+// listenOnIP opens a plain UDP listener bound to the given address, with
+// no interface/address management (config.IPSCModeManaged and
+// config.IPSCModeAny both end up here, the former after netlink() has
+// already assigned ip to the interface).
+func (s *IPSCServer) listenOnIP(ip string, port uint16) error {
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{
+		IP:   net.ParseIP(ip),
+		Port: int(port),
 	})
-
 	if err != nil {
-		return fmt.Errorf("error starting UDP listener: %w", err)
+		return fmt.Errorf("error starting UDP listener on %s:%d: %w", ip, port, err)
 	}
 
+	s.udp = udp
 	s.wg.Add(1)
 	go s.handler()
+	return nil
+}
 
+// listenOnInterface opens a UDP listener bound to a specific network
+// interface (SO_BINDTODEVICE) rather than to a specific IP address. The
+// interface's own address(es) are left untouched: whatever is already
+// configured on it (static, DHCP, assigned by wg-quick, ...) is used
+// as-is. The socket accepts traffic on any address currently configured
+// on that interface, on the given port.
+//
+// Requires CAP_NET_RAW (in practice: root), same as netlink() below.
+// Linux-specific, consistent with the rest of this package.
+func (s *IPSCServer) listenOnInterface(ifaceName string, port uint16) error {
+	lc := net.ListenConfig{
+		Control: func(_, _ string, c syscall.RawConn) error {
+			var sockErr error
+			ctrlErr := c.Control(func(fd uintptr) {
+				sockErr = unix.SetsockoptString(
+					int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, ifaceName,
+				)
+			})
+			if ctrlErr != nil {
+				return ctrlErr
+			}
+			return sockErr
+		},
+	}
+
+	pc, err := lc.ListenPacket(context.Background(), "udp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return fmt.Errorf("error binding UDP listener to interface %q: %w", ifaceName, err)
+	}
+
+	udp, ok := pc.(*net.UDPConn)
+	if !ok {
+		pc.Close()
+		return fmt.Errorf("unexpected connection type binding to interface %q", ifaceName)
+	}
+
+	s.udp = udp
+	s.wg.Add(1)
+	go s.handler()
 	return nil
 }
 
@@ -142,6 +210,9 @@ func (s *IPSCServer) Stop() {
 	s.wg.Wait()
 }
 
+// netlink fully manages the addressing of cfg.IPSC.Interface: existing
+// addresses are removed and cfg.IPSC.IP/SubnetMask is assigned. Only
+// used in config.IPSCModeManaged.
 func (s *IPSCServer) netlink() error {
 	link, err := netlink.LinkByName(s.cfg.IPSC.Interface)
 	if err != nil {
