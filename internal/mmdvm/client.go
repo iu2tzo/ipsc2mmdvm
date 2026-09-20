@@ -19,8 +19,13 @@ import (
 )
 
 type MMDVMClient struct {
-	cfg      *config.MMDVM
-	metrics  *metrics.Metrics
+	cfg     *config.MMDVM
+	metrics *metrics.Metrics
+	// verbose enables extra connection-flow logging (dial attempts,
+	// reconnects, redundant Start()/Stop() calls, ...) at Info level.
+	// Set from config.Config.LogsConnectionFlow() (true for log-level
+	// "verbose" or "debug") by the caller of NewMMDVMClient.
+	verbose  bool
 	started  atomic.Bool
 	done     chan struct{}
 	stopOnce sync.Once
@@ -78,7 +83,7 @@ const (
 	dtypeTerminatorWithLC uint = 2 // DataType value for Terminator with Link Control
 )
 
-func NewMMDVMClient(cfg *config.MMDVM, m *metrics.Metrics) *MMDVMClient {
+func NewMMDVMClient(cfg *config.MMDVM, m *metrics.Metrics, verbose bool) *MMDVMClient {
 	tx_chan := make(chan proto.Packet, 256)
 	translator, err := ipsc.NewIPSCTranslator()
 	if err != nil {
@@ -87,6 +92,7 @@ func NewMMDVMClient(cfg *config.MMDVM, m *metrics.Metrics) *MMDVMClient {
 	c := &MMDVMClient{
 		cfg:          cfg,
 		metrics:      m,
+		verbose:      verbose,
 		done:         make(chan struct{}),
 		tx_chan:      tx_chan,
 		connRX:       make(chan []byte, 16),
@@ -200,6 +206,7 @@ func (h *MMDVMClient) Start() error {
 		// Already running; Start() is idempotent so callers (e.g. the
 		// repeater-connected handler) don't need to track whether a
 		// previous Start() already succeeded.
+		h.verboseLog("MMDVM Start() called but client is already running", "network", h.cfg.Name)
 		return nil
 	}
 
@@ -240,16 +247,31 @@ func (h *MMDVMClient) Start() error {
 }
 
 func (h *MMDVMClient) connect() error {
+	h.verboseLog("MMDVM dialing master server", "network", h.cfg.Name, "address", h.cfg.MasterServer)
+
 	var err error
 	var d net.Dialer
 	conn, err := d.DialContext(context.Background(), "udp", h.cfg.MasterServer)
 	if err != nil {
+		h.verboseLog("MMDVM dial failed", "network", h.cfg.Name, "address", h.cfg.MasterServer, "error", err)
 		return err
 	}
 	h.connMu.Lock()
 	h.conn = conn
 	h.connMu.Unlock()
+
+	h.verboseLog("MMDVM UDP connection established", "network", h.cfg.Name, "address", h.cfg.MasterServer)
 	return nil
+}
+
+// verboseLog emits an Info-level log line only when verbose is enabled
+// (log-level "verbose" or "debug", see config.Config.LogsConnectionFlow).
+// Used for connection-flow events that are useful when debugging
+// connectivity but too chatty to always show at log-level "info".
+func (h *MMDVMClient) verboseLog(msg string, args ...any) {
+	if h.verbose {
+		slog.Info(msg, args...)
+	}
 }
 
 const rptAck = "RPTACK"
@@ -449,6 +471,7 @@ func (h *MMDVMClient) handshakeWatchdog() {
 // reconnect closes the current connection, dials a new one, and
 // sends a fresh login. It is safe to call from any goroutine.
 func (h *MMDVMClient) reconnect() {
+	h.verboseLog("MMDVM reconnecting", "network", h.cfg.Name)
 	h.state.Store(uint32(STATE_TIMEOUT))
 	if h.metrics != nil {
 		h.metrics.MMDVMConnectionState.WithLabelValues(h.cfg.Name).Set(0)
@@ -548,6 +571,7 @@ func (h *MMDVMClient) Stop() {
 		// do. Keeps Stop() safe to call unconditionally, e.g. from the
 		// repeater-disconnected handler or shutdown path regardless of
 		// whether a repeater was ever seen.
+		h.verboseLog("MMDVM Stop() called but client is not running", "network", h.cfg.Name)
 		return
 	}
 

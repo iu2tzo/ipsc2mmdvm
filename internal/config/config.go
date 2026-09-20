@@ -12,9 +12,15 @@ type LogLevel string
 
 const (
 	LogLevelDebug LogLevel = "debug"
-	LogLevelInfo  LogLevel = "info"
-	LogLevelWarn  LogLevel = "warn"
-	LogLevelError LogLevel = "error"
+	// LogLevelVerbose sits between debug and info: it enables extra
+	// connection-flow logging (IPSC listener/peer lifecycle, MMDVM
+	// connect/reconnect attempts, ...) without the much higher-volume
+	// per-packet logging that "debug" also turns on. See
+	// Config.LogsConnectionFlow().
+	LogLevelVerbose LogLevel = "verbose"
+	LogLevelInfo    LogLevel = "info"
+	LogLevelWarn    LogLevel = "warn"
+	LogLevelError   LogLevel = "error"
 )
 
 // DefaultRepeaterTimeoutSeconds is the single source of truth for the
@@ -27,10 +33,18 @@ const (
 const DefaultRepeaterTimeoutSeconds uint = 90
 
 type Config struct {
-	LogLevel LogLevel `name:"log-level" yaml:"log-level" description:"Logging level for the application. One of debug, info, warn, or error" default:"info"`
+	LogLevel LogLevel `name:"log-level" yaml:"log-level" description:"Logging level for the application. One of debug, verbose, info, warn, or error" default:"info"`
 	Metrics  Metrics  `name:"metrics" yaml:"metrics" description:"Configuration for Prometheus metrics"`
 	MMDVM    []MMDVM  `name:"mmdvm" yaml:"mmdvm" description:"Configuration for MMDVM clients (multiple DMR masters)"`
 	IPSC     IPSC     `name:"ipsc" yaml:"ipsc" description:"Configuration for the IPSC server"`
+}
+
+// LogsConnectionFlow reports whether extra connection-flow logging
+// (IPSC listener/peer lifecycle, MMDVM connect/reconnect attempts, ...)
+// should be emitted: true for both LogLevelVerbose and LogLevelDebug,
+// since "debug" is a superset of "verbose".
+func (c Config) LogsConnectionFlow() bool {
+	return c.LogLevel == LogLevelVerbose || c.LogLevel == LogLevelDebug
 }
 
 type Metrics struct {
@@ -228,7 +242,7 @@ var (
 
 func (c Config) Validate() error {
 	switch c.LogLevel {
-	case LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError:
+	case LogLevelDebug, LogLevelVerbose, LogLevelInfo, LogLevelWarn, LogLevelError:
 	default:
 		return ErrInvalidLogLevel
 	}

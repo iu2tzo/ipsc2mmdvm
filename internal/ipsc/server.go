@@ -178,24 +178,24 @@ func (s *IPSCServer) reapStalePeers() {
 	now := time.Now()
 
 	s.mu.Lock()
+	var removed []uint32
 	for id, peer := range s.peers {
 		if now.Sub(peer.LastSeen) > s.repeaterTimeout {
 			delete(s.peers, id)
 			delete(s.lastSend, id)
+			removed = append(removed, id)
 		}
 	}
-	nowConnected := len(s.peers) > 0
-	wasConnected := s.repeaterConnected
-	s.repeaterConnected = nowConnected
 	if s.metrics != nil {
 		s.metrics.IPSCPeersRegistered.Set(float64(len(s.peers)))
 	}
-	handler := s.peerStateHandler
+	nowConnected, wasConnected, handler := s.noteConnectionStateLocked()
 	s.mu.Unlock()
 
-	if handler != nil && nowConnected != wasConnected {
-		handler(nowConnected)
+	for _, id := range removed {
+		s.verboseLog("IPSC peer timed out, removed", "peerID", id, "timeout", s.repeaterTimeout)
 	}
+	s.notifyConnectionState(nowConnected, wasConnected, handler)
 }
 
 // Start opens the IPSC listener according to the mode derived from
@@ -226,15 +226,29 @@ func (s *IPSCServer) Start() error {
 		return err
 	}
 
+	s.verboseLog("IPSC server listening", "mode", s.cfg.IPSC.Mode(), "interface", s.cfg.IPSC.Interface, "ip", s.cfg.IPSC.IP, "port", s.cfg.IPSC.Port)
+
 	// Only reap stale peers (and report repeater connect/disconnect
 	// transitions) when something actually cares about the repeater's
 	// presence, so peers persist forever as before when the feature is
 	// disabled.
 	if s.cfg.IPSC.RequireRepeater {
+		s.verboseLog("IPSC repeater-presence tracking enabled", "repeaterTimeout", s.repeaterTimeout)
 		s.startPeerReaper()
 	}
 
 	return nil
+}
+
+// verboseLog emits an Info-level log line only when log-level is "verbose"
+// or "debug" (see config.Config.LogsConnectionFlow). Used throughout this
+// file for connection-flow events (listener start, peer register/timeout,
+// ...) that are useful when debugging connectivity but too chatty to
+// always show at log-level "info".
+func (s *IPSCServer) verboseLog(msg string, args ...any) {
+	if s.cfg.LogsConnectionFlow() {
+		slog.Info(msg, args...)
+	}
 }
 
 // listenOnIP opens a plain UDP listener bound to the given address, with
@@ -386,17 +400,43 @@ func (s *IPSCServer) handlePacket(data []byte, addr *net.UDPAddr) (*Packet, erro
 	}
 
 	packetType := data[0]
+	// The IPSC protocol has no separate login/password packet: instead,
+	// every packet is signed with an HMAC-SHA1 built from the shared
+	// auth key (IPSC.Auth.Key), appended as its last 10 bytes. For the
+	// connection-request packet (MASTER_REGISTER_REQUEST) this signature
+	// is effectively the repeater "sending its connection password", so
+	// it's logged distinctly (at verbose level) from the ongoing
+	// per-packet authentication of ordinary traffic (logged at debug
+	// level, since it happens on every single packet).
+	isConnectionRequest := PacketType(packetType) == PacketType_MasterRegisterRequest
 
 	if s.cfg.IPSC.Auth.Enabled {
 		if len(data) <= 10 {
 			return nil, fmt.Errorf("packet too short for authentication")
 		}
+
+		if isConnectionRequest {
+			s.verboseLog("IPSC repeater sent connection credentials", "peer", addr)
+		}
+
 		if !s.auth(data) {
 			if s.metrics != nil {
 				s.metrics.IPSCAuthFailures.Inc()
 			}
+			if isConnectionRequest {
+				s.verboseLog("IPSC repeater authentication failed", "peer", addr)
+			} else {
+				slog.Debug("IPSC packet authentication failed", "peer", addr, "packetType", packetType)
+			}
 			return nil, fmt.Errorf("authentication failed")
 		}
+
+		if isConnectionRequest {
+			s.verboseLog("IPSC repeater authentication succeeded", "peer", addr)
+		} else {
+			slog.Debug("IPSC packet authentication succeeded", "peer", addr, "packetType", packetType)
+		}
+
 		data = data[:len(data)-10] // Remove the hash from the data
 	}
 
@@ -476,6 +516,10 @@ func (s *IPSCServer) handleMasterRegisterRequest(data []byte, addr *net.UDPAddr)
 		return err
 	}
 
+	// This is the repeater opening (or renewing) its connection to us:
+	// the first packet of the IPSC "master registration" exchange.
+	s.verboseLog("IPSC connection request received from repeater", "peerID", peerID, "addr", addr)
+
 	mode := s.defaultModeByte()
 	flags := s.defaultFlagsBytes()
 	if len(data) >= 10 {
@@ -489,6 +533,11 @@ func (s *IPSCServer) handleMasterRegisterRequest(data []byte, addr *net.UDPAddr)
 	if err := s.sendPacket(packet, addr); err != nil {
 		return fmt.Errorf("error sending master register reply: %w", err)
 	}
+
+	// Reply sent successfully: the connection with this repeater is now
+	// established (it will keep it alive with MASTER_ALIVE/keepalive
+	// packets from here on).
+	s.verboseLog("IPSC connection established with repeater", "peerID", peerID, "addr", addr)
 
 	return nil
 }
@@ -556,8 +605,8 @@ func (s *IPSCServer) SetBurstHandler(handler func(packetType byte, data []byte, 
 func (s *IPSCServer) upsertPeer(peerID uint32, addr *net.UDPAddr, mode byte, flags [4]byte) {
 	s.mu.Lock()
 
-	peer, ok := s.peers[peerID]
-	if !ok {
+	peer, existed := s.peers[peerID]
+	if !existed {
 		peer = &Peer{ID: peerID}
 		s.peers[peerID] = peer
 	}
@@ -574,6 +623,11 @@ func (s *IPSCServer) upsertPeer(peerID uint32, addr *net.UDPAddr, mode byte, fla
 	nowConnected, wasConnected, handler := s.noteConnectionStateLocked()
 	s.mu.Unlock()
 
+	if !existed {
+		s.verboseLog("IPSC peer registered", "peerID", peerID, "addr", addr)
+	} else {
+		s.verboseLog("IPSC peer re-registered", "peerID", peerID, "addr", addr)
+	}
 	s.notifyConnectionState(nowConnected, wasConnected, handler)
 }
 
@@ -611,7 +665,11 @@ func (s *IPSCServer) noteConnectionStateLocked() (nowConnected, wasConnected boo
 // changed. Split out from noteConnectionStateLocked so it always runs
 // without s.mu held.
 func (s *IPSCServer) notifyConnectionState(nowConnected, wasConnected bool, handler func(bool)) {
-	if handler != nil && nowConnected != wasConnected {
+	if nowConnected == wasConnected {
+		return
+	}
+	s.verboseLog("IPSC repeater connection state changed", "connected", nowConnected)
+	if handler != nil {
 		handler(nowConnected)
 	}
 }

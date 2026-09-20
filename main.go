@@ -11,7 +11,7 @@ import (
 //
 //nolint:gochecknoglobals
 var (
-	version = "1.0.0"
+	version = "1.0.1"
 	commit  = "IU2TZO master"
 )
 
