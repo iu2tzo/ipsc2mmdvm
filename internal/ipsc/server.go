@@ -33,8 +33,19 @@ type IPSCServer struct {
 	peers    map[uint32]*Peer
 	lastSend map[uint32]time.Time
 
+	// repeaterConnected tracks whether at least one peer is currently
+	// registered, so peerStateHandler is only invoked on 0<->1+ peer
+	// transitions rather than on every packet.
+	repeaterConnected bool
+	// repeaterTimeout is how long a peer may go without traffic before
+	// it is considered disconnected and reaped (only used when
+	// cfg.IPSC.RequireRepeater is enabled).
+	repeaterTimeout time.Duration
+	peerStateHandler func(connected bool)
+
 	burstHandler func(packetType byte, data []byte, addr *net.UDPAddr)
 
+	done     chan struct{}
 	wg       sync.WaitGroup
 	stopped  atomic.Bool
 	stopOnce sync.Once
@@ -101,13 +112,89 @@ func NewIPSCServer(cfg *config.Config, m *metrics.Metrics) *IPSCServer {
 		localID = cfg.MMDVM[0].ID
 	}
 
+	// Default the repeater timeout if it's unset, so a zero value never
+	// results in peers being reaped immediately (Validate() already
+	// rejects this combination, but guard against a zero value reaching
+	// here from tests/direct construction too).
+	repeaterTimeout := time.Duration(cfg.IPSC.RepeaterTimeout) * time.Second
+	if repeaterTimeout <= 0 {
+		repeaterTimeout = time.Duration(config.DefaultRepeaterTimeoutSeconds) * time.Second
+	}
+
 	return &IPSCServer{
-		cfg:      cfg,
-		metrics:  m,
-		localID:  localID,
-		authKey:  authKey,
-		peers:    map[uint32]*Peer{},
-		lastSend: map[uint32]time.Time{},
+		cfg:             cfg,
+		metrics:         m,
+		localID:         localID,
+		authKey:         authKey,
+		peers:           map[uint32]*Peer{},
+		lastSend:        map[uint32]time.Time{},
+		repeaterTimeout: repeaterTimeout,
+		done:            make(chan struct{}),
+	}
+}
+
+// SetPeerConnectionHandler registers a callback invoked whenever the
+// registered-peer count transitions to/from zero, i.e. when the first
+// repeater peer registers ("connected") or the last known repeater peer
+// is reaped for inactivity ("disconnected"). Used by callers that only
+// want to open the DMR network connections while a repeater is present
+// (config.IPSC.RequireRepeater).
+func (s *IPSCServer) SetPeerConnectionHandler(handler func(connected bool)) {
+	s.peerStateHandler = handler
+}
+
+// startPeerReaper periodically removes peers that haven't sent any
+// traffic within repeaterTimeout, and reports repeater connect/disconnect
+// transitions via peerStateHandler. Only started when
+// cfg.IPSC.RequireRepeater is enabled, since without it nothing consumes
+// disconnect notifications and peers are otherwise allowed to persist
+// indefinitely (existing behaviour).
+func (s *IPSCServer) startPeerReaper() {
+	interval := s.repeaterTimeout / 3
+	if interval < time.Second {
+		interval = time.Second
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.reapStalePeers()
+			case <-s.done:
+				return
+			}
+		}
+	}()
+}
+
+// reapStalePeers removes peers that have not been heard from within
+// repeaterTimeout and, if the registered-peer count transitions to/from
+// zero as a result, notifies peerStateHandler.
+func (s *IPSCServer) reapStalePeers() {
+	now := time.Now()
+
+	s.mu.Lock()
+	for id, peer := range s.peers {
+		if now.Sub(peer.LastSeen) > s.repeaterTimeout {
+			delete(s.peers, id)
+			delete(s.lastSend, id)
+		}
+	}
+	nowConnected := len(s.peers) > 0
+	wasConnected := s.repeaterConnected
+	s.repeaterConnected = nowConnected
+	if s.metrics != nil {
+		s.metrics.IPSCPeersRegistered.Set(float64(len(s.peers)))
+	}
+	handler := s.peerStateHandler
+	s.mu.Unlock()
+
+	if handler != nil && nowConnected != wasConnected {
+		handler(nowConnected)
 	}
 }
 
@@ -115,18 +202,19 @@ func NewIPSCServer(cfg *config.Config, m *metrics.Metrics) *IPSCServer {
 // cfg.IPSC (see config.IPSC.Mode). Callers are expected to have already
 // run config.Config.Validate() beforehand.
 func (s *IPSCServer) Start() error {
+	var err error
 	switch s.cfg.IPSC.Mode() {
 	case config.IPSCModeManaged:
-		if err := s.netlink(); err != nil {
+		if err = s.netlink(); err != nil {
 			return fmt.Errorf("error configuring network: %w", err)
 		}
-		return s.listenOnIP(s.cfg.IPSC.IP, s.cfg.IPSC.Port)
+		err = s.listenOnIP(s.cfg.IPSC.IP, s.cfg.IPSC.Port)
 
 	case config.IPSCModeBindDevice:
-		return s.listenOnInterface(s.cfg.IPSC.Interface, s.cfg.IPSC.Port)
+		err = s.listenOnInterface(s.cfg.IPSC.Interface, s.cfg.IPSC.Port)
 
 	case config.IPSCModeAny:
-		return s.listenOnIP("0.0.0.0", s.cfg.IPSC.Port)
+		err = s.listenOnIP("0.0.0.0", s.cfg.IPSC.Port)
 
 	default: // config.IPSCModeInvalid
 		// Shouldn't happen if Validate() was called before Start(),
@@ -134,6 +222,19 @@ func (s *IPSCServer) Start() error {
 		return fmt.Errorf("invalid IPSC configuration: interface=%q ip=%q",
 			s.cfg.IPSC.Interface, s.cfg.IPSC.IP)
 	}
+	if err != nil {
+		return err
+	}
+
+	// Only reap stale peers (and report repeater connect/disconnect
+	// transitions) when something actually cares about the repeater's
+	// presence, so peers persist forever as before when the feature is
+	// disabled.
+	if s.cfg.IPSC.RequireRepeater {
+		s.startPeerReaper()
+	}
+
+	return nil
 }
 
 // listenOnIP opens a plain UDP listener bound to the given address, with
@@ -201,6 +302,7 @@ func (s *IPSCServer) Stop() {
 	s.stopOnce.Do(func() {
 		slog.Info("Stopping IPSC server")
 		s.stopped.Store(true)
+		close(s.done)
 		if s.udp != nil {
 			if err := s.udp.Close(); err != nil {
 				slog.Error("error closing UDP listener", "error", err)
@@ -453,7 +555,6 @@ func (s *IPSCServer) SetBurstHandler(handler func(packetType byte, data []byte, 
 
 func (s *IPSCServer) upsertPeer(peerID uint32, addr *net.UDPAddr, mode byte, flags [4]byte) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	peer, ok := s.peers[peerID]
 	if !ok {
@@ -469,11 +570,15 @@ func (s *IPSCServer) upsertPeer(peerID uint32, addr *net.UDPAddr, mode byte, fla
 	if s.metrics != nil {
 		s.metrics.IPSCPeersRegistered.Set(float64(len(s.peers)))
 	}
+
+	nowConnected, wasConnected, handler := s.noteConnectionStateLocked()
+	s.mu.Unlock()
+
+	s.notifyConnectionState(nowConnected, wasConnected, handler)
 }
 
 func (s *IPSCServer) markPeerAlive(peerID uint32, addr *net.UDPAddr) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	peer, ok := s.peers[peerID]
 	if !ok {
@@ -483,6 +588,32 @@ func (s *IPSCServer) markPeerAlive(peerID uint32, addr *net.UDPAddr) {
 	peer.Addr = cloneUDPAddr(addr)
 	peer.LastSeen = time.Now()
 	peer.KeepAliveReceived++
+
+	nowConnected, wasConnected, handler := s.noteConnectionStateLocked()
+	s.mu.Unlock()
+
+	s.notifyConnectionState(nowConnected, wasConnected, handler)
+}
+
+// noteConnectionStateLocked updates repeaterConnected from the current
+// peer count and returns the new/old state plus the handler to notify.
+// Must be called with s.mu held; the actual notification is done by the
+// caller after unlocking (notifyConnectionState), so peerStateHandler is
+// never invoked while holding s.mu.
+func (s *IPSCServer) noteConnectionStateLocked() (nowConnected, wasConnected bool, handler func(bool)) {
+	nowConnected = len(s.peers) > 0
+	wasConnected = s.repeaterConnected
+	s.repeaterConnected = nowConnected
+	return nowConnected, wasConnected, s.peerStateHandler
+}
+
+// notifyConnectionState invokes handler when the connected state actually
+// changed. Split out from noteConnectionStateLocked so it always runs
+// without s.mu held.
+func (s *IPSCServer) notifyConnectionState(nowConnected, wasConnected bool, handler func(bool)) {
+	if handler != nil && nowConnected != wasConnected {
+		handler(nowConnected)
+	}
 }
 
 func (s *IPSCServer) buildMasterRegisterReply() []byte {

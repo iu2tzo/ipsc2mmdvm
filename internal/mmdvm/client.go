@@ -19,12 +19,18 @@ import (
 )
 
 type MMDVMClient struct {
-	cfg          *config.MMDVM
-	metrics      *metrics.Metrics
-	started      atomic.Bool
-	done         chan struct{}
-	stopOnce     sync.Once
-	wg           sync.WaitGroup
+	cfg      *config.MMDVM
+	metrics  *metrics.Metrics
+	started  atomic.Bool
+	done     chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
+	// lifecycleMu serializes Start()/Stop() so the client can be safely
+	// started and stopped repeatedly (e.g. driven by repeater
+	// connect/disconnect events when config.IPSC.RequireRepeater is
+	// enabled), rather than assuming a single start/stop over its
+	// lifetime.
+	lifecycleMu  sync.Mutex
 	tx_chan      chan proto.Packet
 	conn         net.Conn
 	connMu       sync.Mutex // protects conn
@@ -187,6 +193,16 @@ func (h *MMDVMClient) buildRewriteRules() {
 }
 
 func (h *MMDVMClient) Start() error {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+
+	if h.started.Load() {
+		// Already running; Start() is idempotent so callers (e.g. the
+		// repeater-connected handler) don't need to track whether a
+		// previous Start() already succeeded.
+		return nil
+	}
+
 	if h.translator != nil {
 		h.translator.SetPeerID(h.cfg.ID)
 	}
@@ -196,6 +212,12 @@ func (h *MMDVMClient) Start() error {
 	if h.metrics != nil {
 		h.metrics.MMDVMConnectionState.WithLabelValues(h.cfg.Name).Set(1)
 	}
+
+	// Re-create the per-run lifecycle primitives: done/stopOnce are
+	// consumed by the previous Stop() call (if any) and can't be reused
+	// across a Start/Stop cycle.
+	h.done = make(chan struct{})
+	h.stopOnce = sync.Once{}
 
 	err := h.connect()
 	if err != nil {
@@ -518,6 +540,17 @@ func (h *MMDVMClient) rx() {
 }
 
 func (h *MMDVMClient) Stop() {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+
+	if !h.started.Load() {
+		// Not running (never started, or already stopped): nothing to
+		// do. Keeps Stop() safe to call unconditionally, e.g. from the
+		// repeater-disconnected handler or shutdown path regardless of
+		// whether a repeater was ever seen.
+		return
+	}
+
 	h.stopOnce.Do(func() {
 		slog.Info("Stopping MMDVM client", "network", h.cfg.Name)
 
@@ -533,6 +566,9 @@ func (h *MMDVMClient) Stop() {
 		h.connMu.Unlock()
 
 		h.started.Store(false)
+		if h.metrics != nil {
+			h.metrics.MMDVMConnectionState.WithLabelValues(h.cfg.Name).Set(0)
+		}
 	})
 
 	// Wait for all goroutines to finish.
