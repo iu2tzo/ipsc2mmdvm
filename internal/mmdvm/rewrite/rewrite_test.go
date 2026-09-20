@@ -3,7 +3,7 @@ package rewrite
 import (
 	"testing"
 
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/mmdvm/proto"
 )
 
 // helper to create a basic group-call packet

@@ -7,14 +7,14 @@ import (
 	"math"
 	"sync"
 
-	"github.com/USA-RedDragon/dmrgo/dmr/enums"
-	"github.com/USA-RedDragon/dmrgo/dmr/layer2"
-	"github.com/USA-RedDragon/dmrgo/dmr/layer2/elements"
-	"github.com/USA-RedDragon/dmrgo/dmr/layer2/pdu"
-	l3elements "github.com/USA-RedDragon/dmrgo/dmr/layer3/elements"
-	"github.com/USA-RedDragon/dmrgo/dmr/vocoder"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/metrics"
-	mmdvm "github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
+	"github.com/iu2tzo/dmrgo/dmr/enums"
+	"github.com/iu2tzo/dmrgo/dmr/layer2"
+	"github.com/iu2tzo/dmrgo/dmr/layer2/elements"
+	"github.com/iu2tzo/dmrgo/dmr/layer2/pdu"
+	l3elements "github.com/iu2tzo/dmrgo/dmr/layer3/elements"
+	"github.com/iu2tzo/dmrgo/dmr/vocoder"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/metrics"
+	mmdvm "github.com/iu2tzo/ipsc2mmdvm/internal/mmdvm/proto"
 )
 
 // IPSCTranslator converts MMDVM DMRD packets into IPSC user packets.

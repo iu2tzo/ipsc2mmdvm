@@ -5,7 +5,7 @@ release:
   extra_files:
     - glob: ./LICENSE
   github:
-    owner: USA-RedDragon
+    owner: iu2tzo
     name: ipsc2mmdvm
 
 builds:

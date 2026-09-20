@@ -10,12 +10,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/config"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/ipsc"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/metrics"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/proto"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/mmdvm/rewrite"
-	"github.com/USA-RedDragon/ipsc2mmdvm/internal/timeslot"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/config"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/ipsc"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/metrics"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/mmdvm/proto"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/mmdvm/rewrite"
+	"github.com/iu2tzo/ipsc2mmdvm/internal/timeslot"
 )
 
 type MMDVMClient struct {
