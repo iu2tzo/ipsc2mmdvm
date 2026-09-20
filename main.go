@@ -1,36 +1,22 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"os"
 
-	"github.com/iu2tzo/configulator"
 	"github.com/iu2tzo/ipsc2mmdvm/cmd"
-	"github.com/iu2tzo/ipsc2mmdvm/internal/config"
 )
 
 // https://goreleaser.com/cookbooks/using-main.version/
 //
 //nolint:gochecknoglobals
 var (
-	version = "dev"
-	commit  = "none"
+	version = "1.0.0"
+	commit  = "IU2TZO master"
 )
 
 func main() {
 	rootCmd := cmd.NewCommand(version, commit)
-
-	c := configulator.New[config.Config]().
-		WithEnvironmentVariables(&configulator.EnvironmentVariableOptions{
-			Separator: "_",
-		}).
-		WithFile(&configulator.FileOptions{
-			Paths: []string{"config.yaml"},
-		}).
-		WithPFlags(rootCmd.Flags(), nil)
-
-	rootCmd.SetContext(c.WithContext(context.TODO()))
 
 	if err := rootCmd.Execute(); err != nil {
 		slog.Error("Encountered an error.", "error", err.Error())
