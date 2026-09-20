@@ -9,6 +9,16 @@ ipsc:
     enabled: false
     key: ""
 
+  # When true, the connections to the DMR network servers configured
+  # below (mmdvm) are only opened while a repeater is registered with
+  # the IPSC server, and are closed again once the repeater disconnects.
+  # When false (default), DMR network connections are opened immediately
+  # at startup regardless of repeater state.
+  require-repeater: false
+  # Seconds of inactivity after which a registered repeater is considered
+  # disconnected. Only used when require-repeater is true.
+  repeater-timeout: 90
+
 metrics:
   enabled: false
   address: ":9100"

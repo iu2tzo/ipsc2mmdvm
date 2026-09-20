@@ -17,6 +17,15 @@ const (
 	LogLevelError LogLevel = "error"
 )
 
+// DefaultRepeaterTimeoutSeconds is the single source of truth for the
+// IPSC.RepeaterTimeout default. Struct tags are compile-time literals, so
+// the `default:"90"` tag on IPSC.RepeaterTimeout below can't reference this
+// constant directly — TestDefaultRepeaterTimeoutMatchesConstant in
+// config_test.go asserts the two stay in sync. Callers that construct an
+// ipsc.IPSCServer directly, bypassing Load()/Validate() (e.g. tests), get
+// this same value as a fallback when RepeaterTimeout is zero.
+const DefaultRepeaterTimeoutSeconds uint = 90
+
 type Config struct {
 	LogLevel LogLevel `name:"log-level" yaml:"log-level" description:"Logging level for the application. One of debug, info, warn, or error" default:"info"`
 	Metrics  Metrics  `name:"metrics" yaml:"metrics" description:"Configuration for Prometheus metrics"`
@@ -56,6 +65,15 @@ type IPSC struct {
 	IP         string   `name:"ip" yaml:"ip" description:"IP address to assign to the interface (managed mode), or \"0.0.0.0\"/empty to listen without managing addressing"`
 	SubnetMask int      `name:"subnet-mask" yaml:"subnet-mask" description:"Subnet mask for the virtual network interface created for IPSC packets (managed mode only)" default:"24"`
 	Auth       IPSCAuth `name:"auth" yaml:"auth" description:"Authentication configuration for the IPSC server"`
+
+	// RequireRepeater/RepeaterTimeout gate the MMDVM (DMR network) connections
+	// on repeater presence. See MMDVMClient lifecycle in cmd/root.go for how
+	// these are consumed.
+	RequireRepeater bool `name:"require-repeater" yaml:"require-repeater" description:"When enabled, connections to the configured DMR network servers are only opened while a repeater is registered with the IPSC server, and closed again once the repeater disconnects. When disabled (default), DMR network connections are opened immediately at startup regardless of repeater state"`
+	// RepeaterTimeout's default below (90) must match DefaultRepeaterTimeoutSeconds;
+	// struct tags are compile-time literals so it can't reference the constant
+	// directly (enforced by TestDefaultRepeaterTimeoutMatchesConstant).
+	RepeaterTimeout uint `name:"repeater-timeout" yaml:"repeater-timeout" description:"Seconds of inactivity after which a registered repeater is considered disconnected. Only used when require-repeater is enabled" default:"90"`
 }
 
 // IPSCMode identifies how the IPSC server should open its listening
@@ -203,8 +221,9 @@ var (
 			"ip=\"0.0.0.0\"/empty alone to listen on all interfaces, " +
 			"or interface alone (ip empty) to bind to that interface",
 	)
-	ErrInvalidIPSCAuthKey    = errors.New("invalid IPSC authentication key provided")
-	ErrInvalidMetricsAddress = errors.New("invalid metrics address provided")
+	ErrInvalidIPSCAuthKey         = errors.New("invalid IPSC authentication key provided")
+	ErrInvalidMetricsAddress      = errors.New("invalid metrics address provided")
+	ErrInvalidIPSCRepeaterTimeout = errors.New("invalid IPSC repeater timeout: must be greater than zero when require-repeater is enabled")
 )
 
 func (c Config) Validate() error {
@@ -298,6 +317,10 @@ func (c Config) Validate() error {
 
 	default: // IPSCModeInvalid
 		return ErrInvalidIPSCConfiguration
+	}
+
+	if c.IPSC.RequireRepeater && c.IPSC.RepeaterTimeout == 0 {
+		return ErrInvalidIPSCRepeaterTimeout
 	}
 
 	if c.IPSC.Auth.Enabled && c.IPSC.Auth.Key == "" {

@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -396,5 +398,29 @@ func TestValidateMetricsAddress(t *testing.T) {
 				t.Fatalf("did not expect %v, got %v", ErrInvalidMetricsAddress, err)
 			}
 		})
+	}
+}
+
+// TestDefaultRepeaterTimeoutMatchesConstant guards against the
+// `default:"90"` struct tag on IPSC.RepeaterTimeout drifting out of sync
+// with DefaultRepeaterTimeoutSeconds: struct tags are compile-time string
+// literals, so the tag can't reference the constant directly, and this is
+// the only automated check tying the two together.
+func TestDefaultRepeaterTimeoutMatchesConstant(t *testing.T) {
+	t.Parallel()
+
+	field, ok := reflect.TypeOf(IPSC{}).FieldByName("RepeaterTimeout")
+	if !ok {
+		t.Fatal("IPSC.RepeaterTimeout field not found")
+	}
+
+	tagDefault, err := strconv.ParseUint(field.Tag.Get("default"), 10, 64)
+	if err != nil {
+		t.Fatalf("failed to parse `default` tag on IPSC.RepeaterTimeout: %v", err)
+	}
+
+	if uint(tagDefault) != DefaultRepeaterTimeoutSeconds {
+		t.Fatalf("IPSC.RepeaterTimeout `default` tag (%d) does not match DefaultRepeaterTimeoutSeconds (%d)",
+			tagDefault, DefaultRepeaterTimeoutSeconds)
 	}
 }

@@ -82,14 +82,13 @@ func runRoot(cmd *cobra.Command, _ []string) error {
 	if m != nil {
 		outboundTSMgr.SetMetrics(m, "outbound")
 	}
+	// Clients are constructed here but only started immediately when
+	// require-repeater is disabled; otherwise their lifecycle is driven
+	// by the IPSC server's peer-connection callback wired in below.
 	mmdvmClients := make([]*mmdvm.MMDVMClient, 0, len(cfg.MMDVM))
 	for i := range cfg.MMDVM {
 		client := mmdvm.NewMMDVMClient(&cfg.MMDVM[i], m)
 		client.SetOutboundTSManager(outboundTSMgr)
-		err = client.Start()
-		if err != nil {
-			return fmt.Errorf("failed to start MMDVM client %q: %w", cfg.MMDVM[i].Name, err)
-		}
 		mmdvmClients = append(mmdvmClients, client)
 	}
 
@@ -117,6 +116,36 @@ func runRoot(cmd *cobra.Command, _ []string) error {
 	// Wire all MMDVM clients' inbound data to the IPSC server.
 	for _, client := range mmdvmClients {
 		client.SetIPSCHandler(ipscServer.SendUserPacket)
+	}
+
+	if cfg.IPSC.RequireRepeater {
+		// Gate the DMR network connections on repeater presence: only
+		// open the MMDVM connections once a repeater peer registers
+		// with the IPSC server, and tear them down again once that
+		// repeater goes stale (see IPSCServer.reapStalePeers).
+		ipscServer.SetPeerConnectionHandler(func(connected bool) {
+			if connected {
+				slog.Info("repeater connected, starting DMR network connections")
+				for _, client := range mmdvmClients {
+					if startErr := client.Start(); startErr != nil {
+						slog.Error("failed to start MMDVM client", "network", client.Name(), "error", startErr)
+					}
+				}
+			} else {
+				slog.Info("repeater disconnected, stopping DMR network connections")
+				for _, client := range mmdvmClients {
+					client.Stop()
+				}
+			}
+		})
+	} else {
+		// Default behaviour: connect to all configured DMR networks
+		// immediately at startup, regardless of repeater state.
+		for _, client := range mmdvmClients {
+			if err = client.Start(); err != nil {
+				return fmt.Errorf("failed to start MMDVM client %q: %w", client.Name(), err)
+			}
+		}
 	}
 
 	err = ipscServer.Start()
