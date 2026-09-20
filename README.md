@@ -57,6 +57,9 @@ Here is the full example config with comments:
 log-level: info
 
 ipsc:
+  # interface + ip below both set = "managed" mode: ipsc2mmdvm rewrites
+  # eth0's addressing to ip/subnet-mask. See "How ipsc2mmdvm Listens for
+  # the Repeater" below for the other two modes (bind-only and any-interface).
   interface: "eth0"       # The network interface connected to your repeater
   port: 50000             # UDP port the repeater will connect to
   ip: "10.10.250.1"       # IP address assigned to the interface (must match repeater's Gateway IP)
@@ -134,14 +137,32 @@ mmdvm:
 
 **Config notes:**
 
-- **`ipsc.interface`** - The name of the network interface physically connected to your repeater. On a Raspberry Pi this is typically `eth0`. Run `ip link` to see your interface names.
-- **`ipsc.ip`** - The IP address ipsc2mmdvm assigns to that interface. This becomes the "Master IP" in your repeater's CPS config, and also the gateway for the repeater. Pick any private IP (e.g. `10.10.250.1`).
+- **`ipsc.interface`** - The name of the network interface physically connected to your repeater. On a Raspberry Pi this is typically `eth0`. Run `ip link` to see your interface names. Combined with `ipsc.ip`, this also determines the listening mode — see "How ipsc2mmdvm Listens for the Repeater" below.
+- **`ipsc.ip`** - The IP address ipsc2mmdvm assigns to `ipsc.interface` (when both are set — see below). This becomes the "Master IP" in your repeater's CPS config, and also the gateway for the repeater. Pick any private IP (e.g. `10.10.250.1`).
 - **`ipsc.port`** - The UDP port to listen on. The default `50000` works fine. Must match the "Master UDP Port" in CPS.
 - **`mmdvm`** - A YAML array of DMR master connections. Each entry is a separate master. You can connect to as many masters as you like.
 - **`mmdvm[].name`** - A friendly name for this network, used in log messages (e.g. `"BrandMeister"`, `"TGIF"`).
 - **`mmdvm[].master-server`** - The master's host and port. For BrandMeister, find the master covering your region in the [BrandMeister Master Server List](https://brandmeister.network/?page=masters). The format is `host:port` (e.g. `3104.master.brandmeister.network:62030`).
 - **`mmdvm[].password`** - Your hotspot security password, such as the one set in your BrandMeister self-care dashboard.
 - **`mmdvm[].radio-id`** - Your repeater's DMR ID, registered at [radioid.net](https://radioid.net/).
+
+### How ipsc2mmdvm Listens for the Repeater
+
+**This is an important distinction — it determines whether ipsc2mmdvm changes your network interface's IP address or not.** `ipsc.interface` and `ipsc.ip` together select one of three listening modes:
+
+|                Setting combination                |    Mode     |                                                                                Behavior                                                                                |
+| -------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interface` **and** a real `ip` (not empty/`0.0.0.0`) | **Managed**   | ipsc2mmdvm **rewrites the interface's address**: it removes any existing addresses on `interface`, assigns it `ip`/`subnet-mask`, and brings the link up. This is the original, most common setup for a repeater on a dedicated Ethernet link (see the example config above). |
+| `interface` set, `ip` empty or `0.0.0.0`           | **Bind-device** | ipsc2mmdvm **does not touch the interface's addressing at all**. It only binds its UDP socket to that specific interface (`SO_BINDTODEVICE`), using whatever IP is already configured on it (static, DHCP, ...). Use this if the interface already has an address you manage yourself. |
+| `interface` empty, `ip` empty or `0.0.0.0`         | **Any**       | ipsc2mmdvm listens on the configured `port` on **every** interface, with no address management and no interface restriction.                                          |
+
+In other words:
+
+- Set **both `interface` and `ip`** → the address gets **rewritten onto the card** (managed mode).
+- Set **`interface` only, with `ip: "0.0.0.0"` (or omitted)** → ipsc2mmdvm **binds only to that card**, without changing its address (bind-device mode).
+- Leave **both empty** (or `ip: "0.0.0.0"` with no `interface`) → it listens on **all interfaces** (any mode).
+
+Any other combination (e.g. `ip` set but `interface` empty) is rejected at startup, since there would be no interface to assign that address to.
 
 ### Only Connect to DMR Masters While the Repeater Is Connected
 
@@ -267,9 +288,9 @@ All settings can also be set via **environment variables** using `_` as a separa
 
 |         Setting          |  Type  |    Default    |                                          Description                                          |
 | ------------------------- | ------ | ------------- | ---------------------------------------------------------------------------------------------- |
-| `ipsc.interface`          | string | -             | Network interface connected to the repeater                                                    |
+| `ipsc.interface`          | string | -             | Network interface connected to the repeater. Combined with `ipsc.ip`, selects the listening mode — see "How ipsc2mmdvm Listens for the Repeater" above |
 | `ipsc.port`               | uint16 | -             | UDP listen port                                                                                 |
-| `ipsc.ip`                 | string | `10.10.250.1` | IP address to assign to the interface                                                          |
+| `ipsc.ip`                 | string | -             | IP address to rewrite onto `ipsc.interface` (managed mode only). Leave empty/`0.0.0.0` for bind-device or any mode — see above. **No default**: an empty value is meaningful (it selects a different mode), not a placeholder |
 | `ipsc.subnet-mask`        | int    | `24`          | CIDR subnet mask (1–32)                                                                         |
 | `ipsc.auth.enabled`       | bool   | `false`       | Enable IPSC authentication                                                                      |
 | `ipsc.auth.key`           | string | -             | Hex authentication key (up to 40 chars)                                                         |
