@@ -15,14 +15,16 @@ flowchart LR
     B <-->|"Internet<br>MMDVM protocol"| D[DMR Master 2<br>e.g. TGIF]
 ```
 
-Your repeater connects directly via Ethernet cable to the box running ipsc2mmdvm. The software acts as an IPSC master to the repeater and forwards voice and data traffic to and from one or more DMR masters over the internet. DMRGateway-style rewrite rules let you route specific talkgroups to specific masters.
+In the most common setup, your repeater connects directly via Ethernet cable to the box running ipsc2mmdvm, which manages that interface's IP address for it (**managed mode**). The software acts as an IPSC master to the repeater and forwards voice and data traffic to and from one or more DMR masters over the internet. DMRGateway-style rewrite rules let you route specific talkgroups to specific masters.
+
+This isn't the only supported topology, though: ipsc2mmdvm can also run on the same LAN as the repeater without managing its address (**bind-device mode**), or on a remote/cloud host with no direct network link to the repeater at all (**any mode**) — see [How ipsc2mmdvm Listens for the Repeater](#how-ipsc2mmdvm-listens-for-the-repeater) below.
 
 ## Requirements
 
 - A **Motorola IPSC-capable DMR repeater**
-- A **Raspberry Pi** (any model with Wi-Fi and an Ethernet port) or any **Linux box with a spare NIC**
-- An **Ethernet cable** to connect the repeater directly to the Pi/Linux box
-- **Internet access** on the Pi/Linux box (via Wi-Fi on a Raspberry Pi, or a second NIC on a Linux box)
+- A host to run ipsc2mmdvm on: a **Raspberry Pi**, a **Linux box** on the same LAN as the repeater, or a **cloud VPS** — see [Connect the Hardware (or Network)](#4-connect-the-hardware-or-network) for which fits your setup
+- An **Ethernet cable** to connect the repeater directly to that host — only required for the default direct-cable (managed mode) setup; not needed for the LAN or cloud-VPS setups
+- **Internet access** on that host (via Wi-Fi on a Raspberry Pi, a second NIC on a Linux box, or natively on a VPS)
 - A **DMR Master** with a registered repeater ID to connect to (e.g. BrandMeister)
 
 ## Setup
@@ -204,16 +206,39 @@ Open your repeater's codeplug in the **Motorola Customer Programming Software (C
 
 Write the codeplug to the repeater.
 
-### 4. Connect the Hardware
+### 4. Connect the Hardware (or Network)
+
+How you wire things up depends on which [listening mode](#how-ipsc2mmdvm-listens-for-the-repeater) you configured in step 2. Pick the scenario that matches your setup:
+
+#### Managed mode — dedicated direct link (the default, most common setup)
+
+Use this when ipsc2mmdvm and the repeater are the only two devices on that link — typically a Raspberry Pi acting as a dedicated "hotspot brain" for a single repeater at home or in a shack.
 
 1. **Plug an Ethernet cable** directly from your repeater's Ethernet port to the Ethernet port on your Raspberry Pi (or spare NIC on your Linux box).
-2. Make sure the Pi/Linux box has **internet access** through a different interface (Wi-Fi on a Pi, or a second NIC).
+2. Make sure the Pi/Linux box has **internet access** through a *different* interface (Wi-Fi on a Pi, or a second NIC).
 
-> **Note:** The Ethernet interface connected to the repeater is dedicated to ipsc2mmdvm. Do not use it for anything else, ipsc2mmdvm will assign it an IP address automatically.
+> **Note:** The Ethernet interface connected to the repeater is dedicated to ipsc2mmdvm — do not use it for anything else. ipsc2mmdvm will remove any existing address on it and assign it `ipsc.ip` automatically. If that interface is shared with other devices/services, use bind-device mode instead (below).
+
+#### Bind-device mode — repeater and ipsc2mmdvm share an existing LAN
+
+Use this when the repeater is **not** directly cabled to the ipsc2mmdvm box, but both already sit on the same structured network — e.g. a clubhouse/site LAN with a switch, where the repeater already has its own static IP (or a DHCP reservation) and other equipment (Wi-Fi APs, other radios, a NAS, ...) shares that same network and interface.
+
+1. Give the repeater a **static IP** (or a DHCP reservation) on that LAN, and set it as the "Master IP" in CPS (see [Link Establishment](#link-establishment) above) so it can reach the ipsc2mmdvm box.
+2. On the ipsc2mmdvm box (e.g. a Raspberry Pi or PC already plugged into that same LAN switch), set `ipsc.interface` to the LAN NIC (e.g. `eth0`) and leave `ipsc.ip` empty (or `"0.0.0.0"`) — ipsc2mmdvm will bind to that interface **without** touching its existing address or routes.
+3. No dedicated cable or second interface is needed for internet access: the same LAN NIC already provides it.
+
+#### Any mode — cloud VPS or remote site, no local network in common with the repeater
+
+Use this when ipsc2mmdvm doesn't run anywhere near the repeater at all — e.g. on a cloud VPS (DigitalOcean, Hetzner, ...) reached by the repeater over the public internet, or a remote mountaintop site linked back over a VPN/WAN.
+
+1. Deploy ipsc2mmdvm on the VPS/remote host and leave both `ipsc.interface` and `ipsc.ip` empty — it will listen on `ipsc.port` across all of that host's interfaces.
+2. Make sure `ipsc.port` (UDP) is reachable from the repeater: open it in the VPS's firewall/security group, or forward it through the site router/NAT to the repeater's own network if the repeater initiates the connection outbound over WAN.
+3. Set the VPS's public IP (or the WAN address the repeater can reach) as the "Master IP" in CPS (see [Link Establishment](#link-establishment) above).
+4. Since there's no dedicated/managed interface here, strongly consider enabling `ipsc.auth` (see the config above) — the listener is reachable from the wider network, not just a private direct link.
 
 ### 5. Run ipsc2mmdvm
 
-ipsc2mmdvm requires root privileges to configure the network interface. Run it from the directory containing your config file, or copy the config to the working directory:
+In **managed** and **bind-device** mode, ipsc2mmdvm needs root privileges (to reconfigure the interface, or to bind the socket to it). In **any** mode (e.g. the VPS setup above) plain UDP is used and root usually isn't required, unless your platform otherwise restricts binding to the configured port. Run it from the directory containing your config file, or copy the config to the working directory:
 
 ```bash
 sudo ipsc2mmdvm
