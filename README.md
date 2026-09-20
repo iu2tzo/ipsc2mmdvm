@@ -49,6 +49,11 @@ sudo mv ipsc2mmdvm.yaml /etc/ipsc2mmdvm.yaml
 Here is the full example config with comments:
 
 ```yaml
+# One of: debug, verbose, info, warn, error.
+# "verbose" sits between debug and info: it adds extra connection-flow
+# logging (repeater connect/disconnect, DMR master connect/reconnect, ...)
+# without the much higher-volume per-packet logging that "debug" also
+# turns on.
 log-level: info
 
 ipsc:
@@ -59,6 +64,12 @@ ipsc:
   auth:
     enabled: false        # Set to true if you configured an auth key in CPS
     key: ""               # Hex string, up to 40 characters (must match CPS)
+
+  # Optional: only open the connections to the DMR masters below while
+  # the repeater is actually connected (see "Only Connect to DMR Masters
+  # While the Repeater Is Connected" below).
+  require-repeater: false
+  repeater-timeout: 90    # Seconds of repeater inactivity before it's considered disconnected
 
 metrics:
   enabled: false          # Enable Prometheus metrics endpoint
@@ -77,6 +88,7 @@ mmdvm:
     tx-freq: 424075000
 
     color-code: 7         # Must match your repeater's color code (0-15)
+    # slots: 3              # Active timeslots bitmask (1=TS1, 2=TS2, 3=both, default)
 
     # Optional, reported to BrandMeister:
     # latitude: 30.000000
@@ -93,6 +105,14 @@ mmdvm:
     #     to-slot: 1
     #     to-tg: 9
     #     range: 1
+
+    # Let all group/private calls on a timeslot pass through unchanged,
+    # without needing an explicit rewrite rule per talkgroup/ID:
+    # pass-all-tg: [1]       # all group-call traffic on TS1 passes through unchanged
+    # pass-all-pc: [1]       # same, for private calls
+    # Or, for TS2 instead:
+    # pass-all-tg: [2]       # all group-call traffic on TS2 passes through unchanged
+    # pass-all-pc: [2]       # same, for private calls
 
   # Add more masters for multi-network support:
   # - name: "TGIF"
@@ -122,6 +142,20 @@ mmdvm:
 - **`mmdvm[].master-server`** - The master's host and port. For BrandMeister, find the master covering your region in the [BrandMeister Master Server List](https://brandmeister.network/?page=masters). The format is `host:port` (e.g. `3104.master.brandmeister.network:62030`).
 - **`mmdvm[].password`** - Your hotspot security password, such as the one set in your BrandMeister self-care dashboard.
 - **`mmdvm[].radio-id`** - Your repeater's DMR ID, registered at [radioid.net](https://radioid.net/).
+
+### Only Connect to DMR Masters While the Repeater Is Connected
+
+By default, ipsc2mmdvm opens the connections to all configured DMR masters (`mmdvm`) immediately at startup, regardless of whether the repeater itself is connected yet.
+
+Set `ipsc.require-repeater: true` to change this: the connections to the DMR masters are only opened once the repeater registers with the IPSC server, and are closed again if the repeater stops sending traffic for longer than `ipsc.repeater-timeout` seconds (default `90`). This avoids holding open, idle sessions on the DMR masters (e.g. BrandMeister, TGIF) when the physical repeater is powered off or disconnected.
+
+```yaml
+ipsc:
+  require-repeater: true
+  repeater-timeout: 90
+```
+
+This is entirely optional — leave `require-repeater` at its default (`false`) to keep the original always-connected behavior. To watch this behavior as it happens, set `log-level: verbose` (see [Configuration Reference](#configuration-reference)) to see the repeater connect/disconnect events and the resulting DMR master connect/disconnect actions in the logs.
 
 ### 3. Configure the Motorola Repeater (CPS)
 
@@ -216,20 +250,31 @@ All settings can also be set via **environment variables** using `_` as a separa
 
 ### General
 
-|   Setting   |  Type  | Default |                   Description                   |
-| ----------- | ------ | ------- | ----------------------------------------------- |
-| `log-level` | string | `info`  | Log verbosity: `debug`, `info`, `warn`, `error` |
+|   Setting   |  Type  | Default |                                     Description                                     |
+| ----------- | ------ | ------- | ------------------------------------------------------------------------------------ |
+| `log-level` | string | `info`  | Log verbosity: `debug`, `verbose`, `info`, `warn`, `error` (see note below) |
+
+> `verbose` sits between `debug` and `info`: it enables extra connection-flow logging (IPSC repeater connect/disconnect, peer register/timeout, DMR master connect/reconnect attempts, authentication outcome, ...) without the much higher-volume per-packet logging that `debug` also enables. `debug` includes everything `verbose` shows, plus per-packet dumps.
+
+### Metrics
+
+|      Setting      |  Type  | Default |                Description                |
+| ------------------ | ------ | ------- | ------------------------------------------ |
+| `metrics.enabled`  | bool   | `false` | Enable the Prometheus `/metrics` endpoint |
+| `metrics.address`  | string | `:9100` | Address to serve the metrics endpoint on  |
 
 ### IPSC
 
-|       Setting       |  Type  |    Default    |                 Description                 |
-| ------------------- | ------ | ------------- | ------------------------------------------- |
-| `ipsc.interface`    | string | -             | Network interface connected to the repeater |
-| `ipsc.port`         | uint16 | -             | UDP listen port                             |
-| `ipsc.ip`           | string | `10.10.250.1` | IP address to assign to the interface       |
-| `ipsc.subnet-mask`  | int    | `24`          | CIDR subnet mask (1–32)                     |
-| `ipsc.auth.enabled` | bool   | `false`       | Enable IPSC authentication                  |
-| `ipsc.auth.key`     | string | -             | Hex authentication key (up to 40 chars)     |
+|         Setting          |  Type  |    Default    |                                          Description                                          |
+| ------------------------- | ------ | ------------- | ---------------------------------------------------------------------------------------------- |
+| `ipsc.interface`          | string | -             | Network interface connected to the repeater                                                    |
+| `ipsc.port`               | uint16 | -             | UDP listen port                                                                                 |
+| `ipsc.ip`                 | string | `10.10.250.1` | IP address to assign to the interface                                                          |
+| `ipsc.subnet-mask`        | int    | `24`          | CIDR subnet mask (1–32)                                                                         |
+| `ipsc.auth.enabled`       | bool   | `false`       | Enable IPSC authentication                                                                      |
+| `ipsc.auth.key`           | string | -             | Hex authentication key (up to 40 chars)                                                         |
+| `ipsc.require-repeater`   | bool   | `false`       | Only open the DMR master connections while the repeater is connected (see section above)        |
+| `ipsc.repeater-timeout`   | uint   | `90`          | Seconds of repeater inactivity before it's considered disconnected. Used only when `require-repeater` is `true` |
 
 ### MMDVM (array — one entry per DMR master)
 
@@ -250,6 +295,9 @@ All settings can also be set via **environment variables** using `_` as a separa
 | `mmdvm[].location`      | string  | -       | Location description                             |
 | `mmdvm[].description`   | string  | -       | Repeater description                             |
 | `mmdvm[].url`           | string  | -       | Repeater URL                                     |
+| `mmdvm[].slots`         | byte    | `3`     | Active timeslots bitmask (1=TS1, 2=TS2, 3=both)  |
+| `mmdvm[].pass-all-tg`   | []int   | -       | Timeslots (e.g. `[1, 2]`) on which all group calls pass through unchanged, without needing a `tg-rewrite` entry per talkgroup |
+| `mmdvm[].pass-all-pc`   | []int   | -       | Timeslots (e.g. `[1, 2]`) on which all private calls pass through unchanged, without needing a `pc-rewrite` entry per ID |
 
 ### Rewrite Rules (per MMDVM entry, optional)
 

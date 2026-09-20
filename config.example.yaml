@@ -92,6 +92,16 @@ mmdvm:
     #     to-id: 9
     #     range: 1
 
+    # PassAll: let all traffic of a given type on a timeslot pass through
+    # to this master unchanged, without configuring a rewrite rule per
+    # talkgroup/ID. Each is a list of timeslots (1 and/or 2).
+    # Example: forward all TS1 traffic to this master unchanged:
+    # pass-all-tg: [1]       # all group-call traffic on TS1 passes through unchanged
+    # pass-all-pc: [1]       # same, for private calls
+    # Example: same, but for TS2 instead:
+    # pass-all-tg: [2]       # all group-call traffic on TS2 passes through unchanged
+    # pass-all-pc: [2]       # same, for private calls
+
   # Additional DMR masters can be added:
   # - name: "TGIF"
   #   master-server: "tgif.network:62031"
