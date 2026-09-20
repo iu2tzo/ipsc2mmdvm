@@ -1,3 +1,9 @@
+# One of: debug, verbose, info, warn, error.
+# "verbose" sits between debug and info: it enables extra connection-flow
+# logging (IPSC listener/peer lifecycle, MMDVM connect/reconnect attempts,
+# ...) without the much higher-volume per-packet logging that "debug"
+# also turns on. Useful for debugging connectivity issues without being
+# flooded by per-packet dumps.
 log-level: info
 
 ipsc:

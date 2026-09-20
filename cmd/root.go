@@ -47,7 +47,11 @@ func runRoot(cmd *cobra.Command, _ []string) error {
 	switch cfg.LogLevel {
 	case config.LogLevelDebug:
 		logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: slog.LevelDebug}))
-	case config.LogLevelInfo:
+	case config.LogLevelVerbose, config.LogLevelInfo:
+		// "verbose" only adds extra connection-flow logging (see
+		// config.Config.LogsConnectionFlow), gated explicitly in the
+		// ipsc/mmdvm packages; at the handler level it behaves like
+		// "info" (no per-packet debug logging).
 		logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: slog.LevelInfo}))
 	case config.LogLevelWarn:
 		logger = slog.New(tint.NewHandler(os.Stderr, &tint.Options{Level: slog.LevelWarn}))
@@ -87,7 +91,7 @@ func runRoot(cmd *cobra.Command, _ []string) error {
 	// by the IPSC server's peer-connection callback wired in below.
 	mmdvmClients := make([]*mmdvm.MMDVMClient, 0, len(cfg.MMDVM))
 	for i := range cfg.MMDVM {
-		client := mmdvm.NewMMDVMClient(&cfg.MMDVM[i], m)
+		client := mmdvm.NewMMDVMClient(&cfg.MMDVM[i], m, cfg.LogsConnectionFlow())
 		client.SetOutboundTSManager(outboundTSMgr)
 		mmdvmClients = append(mmdvmClients, client)
 	}

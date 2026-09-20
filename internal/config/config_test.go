@@ -47,6 +47,7 @@ func TestValidateLogLevel(t *testing.T) {
 		hasError bool
 	}{
 		{"debug", LogLevelDebug, nil, false},
+		{"verbose", LogLevelVerbose, nil, false},
 		{"info", LogLevelInfo, nil, false},
 		{"warn", LogLevelWarn, nil, false},
 		{"error", LogLevelError, nil, false},
@@ -422,5 +423,29 @@ func TestDefaultRepeaterTimeoutMatchesConstant(t *testing.T) {
 	if uint(tagDefault) != DefaultRepeaterTimeoutSeconds {
 		t.Fatalf("IPSC.RepeaterTimeout `default` tag (%d) does not match DefaultRepeaterTimeoutSeconds (%d)",
 			tagDefault, DefaultRepeaterTimeoutSeconds)
+	}
+}
+
+func TestLogsConnectionFlow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		level LogLevel
+		want  bool
+	}{
+		{LogLevelDebug, true},
+		{LogLevelVerbose, true},
+		{LogLevelInfo, false},
+		{LogLevelWarn, false},
+		{LogLevelError, false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.level), func(t *testing.T) {
+			t.Parallel()
+			c := Config{LogLevel: tt.level}
+			if got := c.LogsConnectionFlow(); got != tt.want {
+				t.Fatalf("LogsConnectionFlow() with level %q = %v, want %v", tt.level, got, tt.want)
+			}
+		})
 	}
 }
