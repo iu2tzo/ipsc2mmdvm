@@ -691,17 +691,29 @@ func TestHandleMasterAliveRequestFlow(t *testing.T) {
 	defer client.Close()
 
 	peerID := uint32(66666)
-	reqData := makeControlPacket(PacketType_MasterAliveRequest, peerID)
 	aliveAddr, ok := client.LocalAddr().(*net.UDPAddr)
 	if !ok {
 		t.Fatal("expected *net.UDPAddr from LocalAddr")
 	}
+
+	regReq := makeControlPacketWithModeFlags(PacketType_MasterRegisterRequest, peerID, 0x6A, [4]byte{0, 0, 0, 0x0D})
+	if _, err = s.handlePacket(regReq, aliveAddr); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	readUDP(t, client) // register reply
+
+	s.mu.Lock()
+	s.peers[peerID].LastSeen = time.Now().Add(-time.Minute)
+	s.mu.Unlock()
+
+	// Keep-alive carrying updated mode/flags (TS2 disabled).
+	reqData := makeControlPacketWithModeFlags(PacketType_MasterAliveRequest, peerID, 0x68, [4]byte{0, 0, 0, 0x0C})
 	_, err = s.handlePacket(reqData, aliveAddr)
 	if err != nil {
 		t.Fatalf("handlePacket error: %v", err)
 	}
 
-	// Verify peer was marked alive
+	// Verify peer was marked alive and mode/flags refreshed
 	s.mu.RLock()
 	peer := s.peers[peerID]
 	s.mu.RUnlock()
@@ -711,11 +723,102 @@ func TestHandleMasterAliveRequestFlow(t *testing.T) {
 	if peer.KeepAliveReceived != 1 {
 		t.Fatalf("expected 1 keepalive, got %d", peer.KeepAliveReceived)
 	}
+	if time.Since(peer.LastSeen) > 5*time.Second {
+		t.Fatalf("expected LastSeen to be refreshed, got %v", peer.LastSeen)
+	}
+	if peer.Mode != 0x68 {
+		t.Fatalf("expected mode 0x68, got 0x%02X", peer.Mode)
+	}
+	if peer.Flags != [4]byte{0, 0, 0, 0x0C} {
+		t.Fatalf("expected flags to be refreshed, got %v", peer.Flags)
+	}
 
 	// Verify reply was sent
 	reply := readUDP(t, client)
 	if reply[0] != byte(PacketType_MasterAliveReply) {
 		t.Fatalf("expected alive reply type 0x%02X, got 0x%02X", PacketType_MasterAliveReply, reply[0])
+	}
+}
+
+func TestHandleMasterAliveRequestUnregisteredPeerIgnored(t *testing.T) {
+	t.Parallel()
+	s, srvAddr := newTestServerWithUDP(t, false, "")
+
+	client, err := net.DialUDP("udp", nil, srvAddr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	clientAddr, ok := client.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		t.Fatal("expected *net.UDPAddr from LocalAddr")
+	}
+
+	// Unknown peer: ignored, not added.
+	unknownID := uint32(77777)
+	_, err = s.handlePacket(makeControlPacket(PacketType_MasterAliveRequest, unknownID), clientAddr)
+	if !errors.Is(err, ErrPacketIgnored) {
+		t.Fatalf("expected ErrPacketIgnored, got %v", err)
+	}
+	if s.peerCount() != 0 {
+		t.Fatalf("expected no peers, got %d", s.peerCount())
+	}
+
+	// Peer known only from traffic (never registered): ignored too.
+	trafficID := uint32(88888)
+	s.markPeerAlive(trafficID, clientAddr)
+	_, err = s.handlePacket(makeControlPacket(PacketType_MasterAliveRequest, trafficID), clientAddr)
+	if !errors.Is(err, ErrPacketIgnored) {
+		t.Fatalf("expected ErrPacketIgnored, got %v", err)
+	}
+	s.mu.RLock()
+	keepAlives := s.peers[trafficID].KeepAliveReceived
+	s.mu.RUnlock()
+	if keepAlives != 1 { // only the markPeerAlive above
+		t.Fatalf("expected keepalive counter untouched, got %d", keepAlives)
+	}
+
+	// No reply must have been sent.
+	if err := client.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	buf := make([]byte, 1500)
+	if n, _, err := client.ReadFromUDP(buf); err == nil {
+		t.Fatalf("expected no reply, got %d bytes: %v", n, buf[:n])
+	}
+}
+
+func TestReapStalePeers(t *testing.T) {
+	t.Parallel()
+	s := NewIPSCServer(testConfig(false, ""), nil)
+	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 50000}
+
+	var events []bool
+	s.SetPeerConnectionHandler(func(connected bool) { events = append(events, connected) })
+
+	s.upsertPeer(1, addr, 0x6A, [4]byte{})
+	s.upsertPeer(2, addr, 0x6A, [4]byte{})
+
+	s.mu.Lock()
+	s.peers[1].LastSeen = time.Now().Add(-s.repeaterTimeout - time.Second)
+	s.mu.Unlock()
+
+	s.reapStalePeers()
+	if s.peerCount() != 1 {
+		t.Fatalf("expected 1 peer after first reap, got %d", s.peerCount())
+	}
+
+	s.mu.Lock()
+	s.peers[2].LastSeen = time.Now().Add(-s.repeaterTimeout - time.Second)
+	s.mu.Unlock()
+
+	s.reapStalePeers()
+	if s.peerCount() != 0 {
+		t.Fatalf("expected no peers after second reap, got %d", s.peerCount())
+	}
+
+	if len(events) != 2 || !events[0] || events[1] {
+		t.Fatalf("expected [connected, disconnected] events, got %v", events)
 	}
 }
 

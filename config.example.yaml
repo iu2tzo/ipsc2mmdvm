@@ -22,7 +22,8 @@ ipsc:
   # at startup regardless of repeater state.
   require-repeater: false
   # Seconds of inactivity after which a registered repeater is considered
-  # disconnected. Only used when require-repeater is true.
+  # disconnected and removed (with require-repeater, the DMR network
+  # connections are also closed).
   repeater-timeout: 90
 
 metrics:

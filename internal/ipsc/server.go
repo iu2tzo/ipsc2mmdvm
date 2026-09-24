@@ -38,8 +38,7 @@ type IPSCServer struct {
 	// transitions rather than on every packet.
 	repeaterConnected bool
 	// repeaterTimeout is how long a peer may go without traffic before
-	// it is considered disconnected and reaped (only used when
-	// cfg.IPSC.RequireRepeater is enabled).
+	// it is considered disconnected and reaped.
 	repeaterTimeout time.Duration
 	peerStateHandler func(connected bool)
 
@@ -145,10 +144,7 @@ func (s *IPSCServer) SetPeerConnectionHandler(handler func(connected bool)) {
 
 // startPeerReaper periodically removes peers that haven't sent any
 // traffic within repeaterTimeout, and reports repeater connect/disconnect
-// transitions via peerStateHandler. Only started when
-// cfg.IPSC.RequireRepeater is enabled, since without it nothing consumes
-// disconnect notifications and peers are otherwise allowed to persist
-// indefinitely (existing behaviour).
+// transitions via peerStateHandler (if one is set).
 func (s *IPSCServer) startPeerReaper() {
 	interval := s.repeaterTimeout / 3
 	if interval < time.Second {
@@ -228,14 +224,12 @@ func (s *IPSCServer) Start() error {
 
 	s.verboseLog("IPSC server listening", "mode", s.cfg.IPSC.Mode(), "interface", s.cfg.IPSC.Interface, "ip", s.cfg.IPSC.IP, "port", s.cfg.IPSC.Port)
 
-	// Only reap stale peers (and report repeater connect/disconnect
-	// transitions) when something actually cares about the repeater's
-	// presence, so peers persist forever as before when the feature is
-	// disabled.
-	if s.cfg.IPSC.RequireRepeater {
-		s.verboseLog("IPSC repeater-presence tracking enabled", "repeaterTimeout", s.repeaterTimeout)
-		s.startPeerReaper()
-	}
+	// Always reap stale peers, so a repeater that went silent stops being
+	// sent traffic and listed in peer-list replies. Whether its
+	// disappearance also tears down the DMR network connections is up to
+	// the peerStateHandler (only installed with RequireRepeater).
+	s.verboseLog("IPSC repeater timeout tracking enabled", "repeaterTimeout", s.repeaterTimeout)
+	s.startPeerReaper()
 
 	return nil
 }
@@ -548,14 +542,47 @@ func (s *IPSCServer) handleMasterAliveRequest(data []byte, addr *net.UDPAddr) er
 		return err
 	}
 
-	s.markPeerAlive(peerID, addr)
+	// Like DMRlink, only answer keep-alives from peers that completed the
+	// MASTER_REGISTER exchange. Staying silent makes an unknown repeater
+	// (e.g. reaped for inactivity, or after a restart of this server) time
+	// out on its side and register again, instead of being kept alive as
+	// a half-known peer with no mode/flags.
+	if !s.refreshRegisteredPeer(peerID, addr, data) {
+		slog.Warn("IPSC keep-alive request from unregistered peer ignored, waiting for it to register", "peerID", peerID, "addr", addr)
+		return ErrPacketIgnored
+	}
+	s.verboseLog("IPSC keep-alive request received from repeater", "peerID", peerID, "addr", addr)
 
 	packet := &Packet{data: s.buildMasterAliveReply()}
 	if err := s.sendPacket(packet, addr); err != nil {
 		return fmt.Errorf("error sending master alive reply: %w", err)
 	}
+	s.verboseLog("IPSC keep-alive reply sent to repeater", "peerID", peerID, "addr", addr)
 
 	return nil
+}
+
+// refreshRegisteredPeer handles a MASTER_ALIVE_REQUEST for peerID: if the
+// peer is registered, its address, LastSeen and keep-alive counter are
+// updated, as are its mode/flags when the packet carries them (same
+// layout as MASTER_REGISTER_REQUEST). Returns false, leaving the peer
+// table untouched, if the peer is unknown or not registered.
+func (s *IPSCServer) refreshRegisteredPeer(peerID uint32, addr *net.UDPAddr, data []byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	peer, ok := s.peers[peerID]
+	if !ok || !peer.RegistrationStatus {
+		return false
+	}
+	peer.Addr = cloneUDPAddr(addr)
+	peer.LastSeen = time.Now()
+	peer.KeepAliveReceived++
+	if len(data) >= 10 {
+		peer.Mode = data[5]
+		copy(peer.Flags[:], data[6:10])
+	}
+	return true
 }
 
 func (s *IPSCServer) handlePeerListRequest(data []byte, addr *net.UDPAddr) error {

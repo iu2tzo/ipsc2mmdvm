@@ -320,7 +320,7 @@ All settings can also be set via **environment variables** using `_` as a separa
 | `ipsc.auth.enabled`       | bool   | `false`       | Enable IPSC authentication                                                                      |
 | `ipsc.auth.key`           | string | -             | Hex authentication key (up to 40 chars)                                                         |
 | `ipsc.require-repeater`   | bool   | `false`       | Only open the DMR master connections while the repeater is connected (see section above)        |
-| `ipsc.repeater-timeout`   | uint   | `90`          | Seconds of repeater inactivity before it's considered disconnected. Used only when `require-repeater` is `true` |
+| `ipsc.repeater-timeout`   | uint   | `90`          | Seconds of repeater inactivity (no keep-alive or traffic) before it's considered disconnected and removed; with `require-repeater` it also closes the DMR master connections |
 
 ### MMDVM (array — one entry per DMR master)
 

@@ -87,7 +87,7 @@ type IPSC struct {
 	// RepeaterTimeout's default below (90) must match DefaultRepeaterTimeoutSeconds;
 	// struct tags are compile-time literals so it can't reference the constant
 	// directly (enforced by TestDefaultRepeaterTimeoutMatchesConstant).
-	RepeaterTimeout uint `name:"repeater-timeout" yaml:"repeater-timeout" description:"Seconds of inactivity after which a registered repeater is considered disconnected. Only used when require-repeater is enabled" default:"90"`
+	RepeaterTimeout uint `name:"repeater-timeout" yaml:"repeater-timeout" description:"Seconds of inactivity after which a registered repeater is considered disconnected and removed from the peer table (with require-repeater, this also closes the DMR network connections)" default:"90"`
 }
 
 // IPSCMode identifies how the IPSC server should open its listening
