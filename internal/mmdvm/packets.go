@@ -77,8 +77,11 @@ func (h *MMDVMClient) sendPing() {
 		n    = copy(data, "RPTPING")
 	)
 	binary.BigEndian.PutUint32(data[n:], h.cfg.ID)
-	h.lastPingSent.Store(time.Now().UnixNano())
+	now := time.Now()
+	h.lastPingSent.Store(now.UnixNano())
 	h.enqueue(data)
+	h.verboseLog("MMDVM keep-alive ping sent to master", "network", h.cfg.Name,
+		"sinceLastPong", now.Sub(time.Unix(0, h.lastPing.Load())).Round(time.Millisecond))
 }
 
 func (h *MMDVMClient) sendPacket(packet proto.Packet) {

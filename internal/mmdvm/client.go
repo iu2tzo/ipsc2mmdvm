@@ -452,13 +452,13 @@ func (h *MMDVMClient) handleReady(data []byte) {
 	case "MSTP":
 		if len(data) >= 7 && string(data[:7]) == "MSTPONG" {
 			now := time.Now()
-			if h.metrics != nil {
-				sent := time.Unix(0, h.lastPingSent.Load())
-				if !sent.IsZero() {
-					h.metrics.MMDVMPingRTT.WithLabelValues(h.cfg.Name).Observe(now.Sub(sent).Seconds())
-				}
+			rtt := now.Sub(time.Unix(0, h.lastPingSent.Load()))
+			if h.metrics != nil && h.lastPingSent.Load() != 0 {
+				h.metrics.MMDVMPingRTT.WithLabelValues(h.cfg.Name).Observe(rtt.Seconds())
 			}
 			h.lastPing.Store(now.UnixNano())
+			h.verboseLog("MMDVM keep-alive pong received from master", "network", h.cfg.Name,
+				"rtt", rtt.Round(time.Millisecond))
 		}
 	case "RPTS":
 		if len(data) >= 7 && string(data[:7]) == "RPTSBKN" {
@@ -548,7 +548,8 @@ func (h *MMDVMClient) checkConnection() {
 	if st == STATE_READY {
 		lastPingTime := time.Unix(0, h.lastPing.Load())
 		if now.After(lastPingTime.Add(h.timeout)) {
-			slog.Info("Connection timed out", "network", h.cfg.Name)
+			slog.Info("Connection timed out", "network", h.cfg.Name,
+				"sinceLastPong", now.Sub(lastPingTime).Round(time.Millisecond))
 			h.reconnect()
 			return
 		}
