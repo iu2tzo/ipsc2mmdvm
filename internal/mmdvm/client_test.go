@@ -920,79 +920,81 @@ func TestHandlerTimeoutState(t *testing.T) {
 	client.wg.Wait()
 }
 
-// --- ping() tests ---
+// --- supervise() tests ---
 
-func TestPingSendsInitialPing(t *testing.T) {
-	t.Parallel()
-	client := newTestClient(t)
-	client.keepAlive = 100 * time.Millisecond
-	client.timeout = 5 * time.Second
-	client.state.Store(uint32(STATE_READY))
-
-	client.wg.Add(1)
-	go client.ping()
-
-	// Should send an immediate RPTPING
+// expectFromConnTX waits for the next queued outbound packet and checks
+// its prefix.
+func expectFromConnTX(t *testing.T, client *MMDVMClient, prefix string) {
+	t.Helper()
 	select {
 	case data := <-client.connTX:
-		if string(data[:7]) != tagRPTPING {
-			t.Fatalf("expected RPTPING, got %q", string(data[:min(7, len(data))]))
+		if len(data) < len(prefix) || string(data[:len(prefix)]) != prefix {
+			t.Fatalf("expected %s, got %q", prefix, string(data[:min(len(prefix), len(data))]))
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for initial MSTPING")
+		t.Fatalf("timed out waiting for %s", prefix)
+	}
+}
+
+func TestSuperviseDialsAndLogsIn(t *testing.T) {
+	t.Parallel()
+	serverConn, client := udpPair(t)
+	defer serverConn.Close()
+
+	// No connection yet: supervise() must dial and send RPTL itself.
+	client.connMu.Lock()
+	client.conn.Close()
+	client.conn = nil
+	client.connMu.Unlock()
+
+	client.wg.Add(1)
+	go client.supervise()
+
+	expectFromConnTX(t, client, tagRPTL)
+	//nolint:gosec // G115: test-only, state values fit in uint8
+	if state(client.state.Load()) != STATE_SENT_LOGIN {
+		t.Fatalf("expected STATE_SENT_LOGIN, got %d", client.state.Load())
 	}
 
 	close(client.done)
 	client.wg.Wait()
 }
 
-func TestPingSendsPeriodicPings(t *testing.T) {
+func TestSuperviseSendsPeriodicPings(t *testing.T) {
 	t.Parallel()
-	client := newTestClient(t)
+	serverConn, client := udpPair(t)
+	defer serverConn.Close()
 	client.keepAlive = 50 * time.Millisecond
 	client.timeout = 5 * time.Second
 	client.state.Store(uint32(STATE_READY))
-
-	client.wg.Add(1)
-	go client.ping()
-
-	// Drain the initial ping
-	<-client.connTX
-
-	// Simulate pong to keep alive
 	client.lastPing.Store(time.Now().UnixNano())
 
-	// Wait for a periodic ping
-	select {
-	case data := <-client.connTX:
-		if string(data[:7]) != tagRPTPING {
-			t.Fatalf("expected periodic RPTPING, got %q", string(data[:min(7, len(data))]))
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for periodic MSTPING")
-	}
+	client.wg.Add(1)
+	go client.supervise()
+
+	expectFromConnTX(t, client, tagRPTPING)
+	client.lastPing.Store(time.Now().UnixNano()) // simulate MSTPONG
+	expectFromConnTX(t, client, tagRPTPING)
 
 	close(client.done)
 	client.wg.Wait()
 }
 
-func TestPingStopsOnDone(t *testing.T) {
+func TestSuperviseStopsOnDone(t *testing.T) {
 	t.Parallel()
-	client := newTestClient(t)
+	serverConn, client := udpPair(t)
+	defer serverConn.Close()
 	client.keepAlive = 50 * time.Millisecond
 	client.timeout = 5 * time.Second
 
 	client.wg.Add(1)
-	go client.ping()
-
-	// Drain initial ping
-	<-client.connTX
+	go client.supervise()
 
 	close(client.done)
 	client.wg.Wait()
 }
 
-func TestPingTimeoutReconnects(t *testing.T) {
+func TestSupervisePingTimeoutReconnects(t *testing.T) {
 	t.Parallel()
 	serverConn, client := udpPair(t)
 	defer serverConn.Close()
@@ -1005,28 +1007,101 @@ func TestPingTimeoutReconnects(t *testing.T) {
 	client.lastPing.Store(time.Now().Add(-1 * time.Minute).UnixNano())
 
 	client.wg.Add(1)
-	go client.ping()
-
-	// Drain initial ping
-	<-client.connTX
+	go client.supervise()
 
 	// Should send RPTL (login) after timeout
-	select {
-	case data := <-client.connTX:
-		if string(data[:4]) != tagRPTL {
-			t.Fatalf("expected RPTL after timeout, got %q", string(data[:min(4, len(data))]))
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for RPTL after ping timeout")
-	}
+	expectFromConnTX(t, client, tagRPTL)
 
+	close(client.done)
+	client.wg.Wait()
+}
+
+// TestSuperviseRetriesUnansweredLogin covers the case where the master
+// never answers the RPTL sent after a reconnect: the login must be
+// retried instead of leaving the client stuck in STATE_SENT_LOGIN.
+func TestSuperviseRetriesUnansweredLogin(t *testing.T) {
+	t.Parallel()
+	serverConn, client := udpPair(t)
+	defer serverConn.Close()
+
+	client.keepAlive = 20 * time.Millisecond
+	client.timeout = 50 * time.Millisecond
+	client.state.Store(uint32(STATE_READY))
+	client.lastPing.Store(time.Now().Add(-1 * time.Minute).UnixNano())
+
+	client.wg.Add(1)
+	go client.supervise()
+
+	expectFromConnTX(t, client, tagRPTL) // reconnect after ping timeout
+	expectFromConnTX(t, client, tagRPTL) // retry: nobody answered
+
+	close(client.done)
+	client.wg.Wait()
+}
+
+// TestSuperviseRetriesFailedDial checks that a dial failure is retried
+// rather than leaving the client without a connection for good.
+func TestSuperviseRetriesFailedDial(t *testing.T) {
+	t.Parallel()
+	cfg := testMMDVMConfig()
+	cfg.MasterServer = "this-is-not-a-valid-address:::::999999"
+	client := NewMMDVMClient(cfg, nil, false)
+	client.keepAlive = 20 * time.Millisecond
+	client.timeout = 50 * time.Millisecond
+
+	client.wg.Add(1)
+	go client.supervise()
+
+	// Every attempt restarts the handshake clock: it must keep moving.
+	deadline := time.Now().Add(2 * time.Second)
+	var first int64
+	for time.Now().Before(deadline) {
+		if first == 0 {
+			first = client.handshakeStarted.Load()
+		} else if client.handshakeStarted.Load() != first {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if first == 0 || client.handshakeStarted.Load() == first {
+		t.Fatal("expected the failed dial to be retried")
+	}
 	//nolint:gosec // G115: test-only, state values fit in uint8
-	if state(client.state.Load()) != STATE_SENT_LOGIN {
-		t.Fatalf("expected STATE_SENT_LOGIN after timeout, got %d", client.state.Load())
+	if state(client.state.Load()) != STATE_TIMEOUT {
+		t.Fatalf("expected STATE_TIMEOUT while unreachable, got %d", client.state.Load())
 	}
 
 	close(client.done)
 	client.wg.Wait()
+}
+
+// TestStopWithFullConnTXDoesNotHang reproduces the shutdown hang where a
+// goroutine blocked on a full connTX kept Stop()'s wg.Wait() waiting
+// forever after tx() had exited.
+func TestStopWithFullConnTXDoesNotHang(t *testing.T) {
+	t.Parallel()
+	client := newTestClient(t)
+	client.started.Store(true)
+	for len(client.connTX) < cap(client.connTX) {
+		client.connTX <- []byte("filler")
+	}
+
+	client.wg.Add(1)
+	go func() {
+		defer client.wg.Done()
+		client.sendPing() // blocks: connTX is full and nobody drains it
+	}()
+
+	stopped := make(chan struct{})
+	go func() {
+		client.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() hung with a sender blocked on connTX")
+	}
 }
 
 // --- forwardTX() tests ---

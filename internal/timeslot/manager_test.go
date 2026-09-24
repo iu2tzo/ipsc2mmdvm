@@ -303,3 +303,35 @@ func TestSubmit_SameStreamDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("expected 3 buffered packets from stream 200, got %d", len(buffered))
 	}
 }
+
+func TestSubmit_PendingPacketsCapped(t *testing.T) {
+	m := NewManager()
+	m.maxPendingPackets = 3
+	m.Submit(false, 100, "net1", "a1")
+	for i := 0; i < 10; i++ {
+		m.Submit(false, 200, "net2", i)
+	}
+
+	buffered := m.Release(false, 100)
+	if len(buffered) != 3 {
+		t.Fatalf("expected pending buffer capped at 3 packets, got %d", len(buffered))
+	}
+}
+
+func TestSubmit_PendingStreamsCapped(t *testing.T) {
+	m := NewManager()
+	m.maxPendingStreams = 2
+	m.Submit(false, 100, "net1", "a1")
+	m.Submit(false, 200, "net2", "b1")
+	m.Submit(false, 300, "net3", "c1")
+	if m.Submit(false, 400, "net4", "d1") {
+		t.Fatal("expected packet to be refused")
+	}
+
+	m.mu.Lock()
+	n := len(m.slots[0].pending)
+	m.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("expected 2 pending streams, got %d", n)
+	}
+}

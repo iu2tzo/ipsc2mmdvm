@@ -16,7 +16,7 @@ func (h *MMDVMClient) sendLogin() {
 	)
 	binary.BigEndian.PutUint32(data[n:], h.cfg.ID)
 
-	h.connTX <- data
+	h.enqueue(data)
 }
 
 func (h *MMDVMClient) sendRPTCL() {
@@ -25,7 +25,7 @@ func (h *MMDVMClient) sendRPTCL() {
 		n    = copy(data, "RPTCL")
 	)
 	binary.BigEndian.PutUint32(data[n:], h.cfg.ID)
-	h.connTX <- data
+	h.enqueue(data)
 }
 
 func (h *MMDVMClient) sendRPTC() {
@@ -54,7 +54,7 @@ func (h *MMDVMClient) sendRPTC() {
 	str = append(str, []byte(fmt.Sprintf("%-40s", "20260920"))...)                // 222:262
 	str = append(str, []byte(fmt.Sprintf("%-40s", "MMDVM_MMDVM_HS_Dual_Hat"))...) // 262:302
 
-	h.connTX <- str
+	h.enqueue(str)
 }
 
 func (h *MMDVMClient) sendRPTK(random []byte) {
@@ -68,7 +68,7 @@ func (h *MMDVMClient) sendRPTK(random []byte) {
 	copy(buf[0:4], "RPTK")
 	binary.BigEndian.PutUint32(buf[4:8], h.cfg.ID)
 	copy(buf[8:], token)
-	h.connTX <- buf
+	h.enqueue(buf)
 }
 
 func (h *MMDVMClient) sendPing() {
@@ -78,7 +78,7 @@ func (h *MMDVMClient) sendPing() {
 	)
 	binary.BigEndian.PutUint32(data[n:], h.cfg.ID)
 	h.lastPingSent.Store(time.Now().UnixNano())
-	h.connTX <- data
+	h.enqueue(data)
 }
 
 func (h *MMDVMClient) sendPacket(packet proto.Packet) {
@@ -87,5 +87,5 @@ func (h *MMDVMClient) sendPacket(packet proto.Packet) {
 	if h.metrics != nil {
 		h.metrics.MMDVMPacketsSent.WithLabelValues(h.cfg.Name).Inc()
 	}
-	h.connTX <- data
+	h.enqueue(data)
 }

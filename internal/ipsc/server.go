@@ -37,9 +37,13 @@ type IPSCServer struct {
 	// registered, so peerStateHandler is only invoked on 0<->1+ peer
 	// transitions rather than on every packet.
 	repeaterConnected bool
+	// notifyMu serializes peerStateHandler invocations; notifiedConnected
+	// (guarded by notifyMu) is the last state actually reported to it.
+	notifyMu          sync.Mutex
+	notifiedConnected bool
 	// repeaterTimeout is how long a peer may go without traffic before
 	// it is considered disconnected and reaped.
-	repeaterTimeout time.Duration
+	repeaterTimeout  time.Duration
 	peerStateHandler func(connected bool)
 
 	burstHandler func(packetType byte, data []byte, addr *net.UDPAddr)
@@ -185,13 +189,15 @@ func (s *IPSCServer) reapStalePeers() {
 	if s.metrics != nil {
 		s.metrics.IPSCPeersRegistered.Set(float64(len(s.peers)))
 	}
-	nowConnected, wasConnected, handler := s.noteConnectionStateLocked()
+	changed := s.noteConnectionStateLocked()
 	s.mu.Unlock()
 
 	for _, id := range removed {
 		s.verboseLog("IPSC peer timed out, removed", "peerID", id, "timeout", s.repeaterTimeout)
 	}
-	s.notifyConnectionState(nowConnected, wasConnected, handler)
+	if changed {
+		s.notifyConnectionState()
+	}
 }
 
 // Start opens the IPSC listener according to the mode derived from
@@ -371,20 +377,19 @@ func (s *IPSCServer) handler() {
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
-		s.wg.Add(1)
-		go func(packetData []byte, packetAddr *net.UDPAddr) {
-			defer s.wg.Done()
-			packet, err := s.handlePacket(packetData, packetAddr)
-			if err != nil {
-				if errors.Is(err, ErrPacketIgnored) {
-					return
-				}
-				slog.Warn("error parsing packet", "peer", packetAddr, "error", err, "length", len(packetData), "packet", packetData)
-				return
+		// Packets are handled inline, in arrival order: voice bursts must
+		// reach the translator in sequence (header, A-F, terminator), and
+		// a goroutine per packet would both reorder them and pile up
+		// goroutines whenever the downstream MMDVM side is slow.
+		packet, err := s.handlePacket(data, addr)
+		if err != nil {
+			if !errors.Is(err, ErrPacketIgnored) {
+				slog.Warn("error parsing packet", "peer", addr, "error", err, "length", len(data), "packet", data)
 			}
+			continue
+		}
 
-			slog.Debug("received packet", "peer", packetAddr, "length", len(packetData), "packet", packet)
-		}(data, addr)
+		slog.Debug("received packet", "peer", addr, "length", len(data), "packet", packet)
 	}
 }
 
@@ -620,7 +625,7 @@ func (s *IPSCServer) handleUserPacket(packetType PacketType, data []byte, addr *
 	if s.burstHandler != nil {
 		packetCopy := make([]byte, len(data))
 		copy(packetCopy, data)
-		go s.burstHandler(byte(packetType), packetCopy, addr)
+		s.burstHandler(byte(packetType), packetCopy, addr)
 	}
 	return nil
 }
@@ -647,7 +652,7 @@ func (s *IPSCServer) upsertPeer(peerID uint32, addr *net.UDPAddr, mode byte, fla
 		s.metrics.IPSCPeersRegistered.Set(float64(len(s.peers)))
 	}
 
-	nowConnected, wasConnected, handler := s.noteConnectionStateLocked()
+	changed := s.noteConnectionStateLocked()
 	s.mu.Unlock()
 
 	if !existed {
@@ -655,7 +660,9 @@ func (s *IPSCServer) upsertPeer(peerID uint32, addr *net.UDPAddr, mode byte, fla
 	} else {
 		s.verboseLog("IPSC peer re-registered", "peerID", peerID, "addr", addr)
 	}
-	s.notifyConnectionState(nowConnected, wasConnected, handler)
+	if changed {
+		s.notifyConnectionState()
+	}
 }
 
 func (s *IPSCServer) markPeerAlive(peerID uint32, addr *net.UDPAddr) {
@@ -670,34 +677,47 @@ func (s *IPSCServer) markPeerAlive(peerID uint32, addr *net.UDPAddr) {
 	peer.LastSeen = time.Now()
 	peer.KeepAliveReceived++
 
-	nowConnected, wasConnected, handler := s.noteConnectionStateLocked()
+	changed := s.noteConnectionStateLocked()
 	s.mu.Unlock()
 
-	s.notifyConnectionState(nowConnected, wasConnected, handler)
+	if changed {
+		s.notifyConnectionState()
+	}
 }
 
 // noteConnectionStateLocked updates repeaterConnected from the current
-// peer count and returns the new/old state plus the handler to notify.
-// Must be called with s.mu held; the actual notification is done by the
-// caller after unlocking (notifyConnectionState), so peerStateHandler is
-// never invoked while holding s.mu.
-func (s *IPSCServer) noteConnectionStateLocked() (nowConnected, wasConnected bool, handler func(bool)) {
-	nowConnected = len(s.peers) > 0
-	wasConnected = s.repeaterConnected
+// peer count and reports whether it changed. Must be called with s.mu
+// held; if it returns true the caller must call notifyConnectionState
+// after unlocking, so peerStateHandler is never invoked while holding s.mu.
+func (s *IPSCServer) noteConnectionStateLocked() (changed bool) {
+	nowConnected := len(s.peers) > 0
+	changed = nowConnected != s.repeaterConnected
 	s.repeaterConnected = nowConnected
-	return nowConnected, wasConnected, s.peerStateHandler
+	return changed
 }
 
-// notifyConnectionState invokes handler when the connected state actually
-// changed. Split out from noteConnectionStateLocked so it always runs
-// without s.mu held.
-func (s *IPSCServer) notifyConnectionState(nowConnected, wasConnected bool, handler func(bool)) {
-	if nowConnected == wasConnected {
+// notifyConnectionState reports the current repeater connection state to
+// peerStateHandler if it differs from the last state reported. Calls are
+// serialized and always report the state as it is *now* (not as it was
+// when the caller saw it change), so concurrent transitions (e.g. the
+// reaper removing the last peer while a packet re-adds it) can never be
+// delivered out of order and leave the handler with a stale state.
+func (s *IPSCServer) notifyConnectionState() {
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+
+	s.mu.RLock()
+	connected := s.repeaterConnected
+	handler := s.peerStateHandler
+	s.mu.RUnlock()
+
+	if connected == s.notifiedConnected {
 		return
 	}
-	s.verboseLog("IPSC repeater connection state changed", "connected", nowConnected)
+	s.notifiedConnected = connected
+	s.verboseLog("IPSC repeater connection state changed", "connected", connected)
 	if handler != nil {
-		handler(nowConnected)
+		handler(connected)
 	}
 }
 

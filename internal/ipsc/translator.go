@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/iu2tzo/dmrgo/dmr/enums"
 	"github.com/iu2tzo/dmrgo/dmr/layer2"
@@ -35,7 +36,20 @@ type IPSCTranslator struct {
 
 	nextCallControl uint32
 	nextStreamID    uint32
+
+	// lastPrune is when stale stream state was last swept (see
+	// pruneStaleLocked).
+	lastPrune time.Time
 }
+
+// Stream state is normally dropped when a call's terminator is seen, but
+// terminators can be lost (UDP) and data-only transactions (CSBK, data
+// headers, ...) never send one. Any stream not seen for staleStreamTimeout
+// is therefore discarded, sweeping at most once per pruneInterval.
+const (
+	staleStreamTimeout = 5 * time.Second
+	pruneInterval      = time.Second
+)
 
 // streamState tracks RTP sequencing and call framing for one voice stream.
 type streamState struct {
@@ -46,6 +60,7 @@ type streamState struct {
 	headersSent  int  // number of voice headers sent (3 required)
 	burstIndex   int  // 0-5 → A-F
 	firstPacket  bool // true for the very first packet
+	lastSeen     time.Time
 }
 
 // IPSC burst data type constants (byte 30 of IPSC voice packet)
@@ -92,6 +107,9 @@ func (t *IPSCTranslator) TranslateToIPSC(pkt mmdvm.Packet) [][]byte {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	now := time.Now()
+	t.pruneStaleLocked(now)
+
 	streamID := pkt.StreamID
 	if streamID > math.MaxUint32 {
 		return nil
@@ -113,6 +131,7 @@ func (t *IPSCTranslator) TranslateToIPSC(pkt mmdvm.Packet) [][]byte {
 			t.metrics.TranslatorActiveStreams.WithLabelValues("mmdvm_to_ipsc").Inc()
 		}
 	}
+	ss.lastSeen = now
 
 	frameType := pkt.FrameType
 	dtypeOrVSeq := pkt.DTypeOrVSeq
@@ -184,7 +203,41 @@ func (t *IPSCTranslator) TranslateToIPSC(pkt mmdvm.Packet) [][]byte {
 func (t *IPSCTranslator) CleanupStream(streamID uint32) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if _, ok := t.streams[streamID]; !ok {
+		return
+	}
 	delete(t.streams, streamID)
+	if t.metrics != nil {
+		t.metrics.TranslatorActiveStreams.WithLabelValues("mmdvm_to_ipsc").Dec()
+	}
+}
+
+// pruneStaleLocked drops per-stream state (both directions) not updated
+// within staleStreamTimeout. Must be called with t.mu held.
+func (t *IPSCTranslator) pruneStaleLocked(now time.Time) {
+	if now.Sub(t.lastPrune) < pruneInterval {
+		return
+	}
+	t.lastPrune = now
+
+	for id, ss := range t.streams {
+		if now.Sub(ss.lastSeen) > staleStreamTimeout {
+			delete(t.streams, id)
+			slog.Debug("IPSCTranslator: dropping stale stream", "direction", "mmdvm_to_ipsc", "streamID", id)
+			if t.metrics != nil {
+				t.metrics.TranslatorActiveStreams.WithLabelValues("mmdvm_to_ipsc").Dec()
+			}
+		}
+	}
+	for callControl, rss := range t.reverseStreams {
+		if now.Sub(rss.lastSeen) > staleStreamTimeout {
+			delete(t.reverseStreams, callControl)
+			slog.Debug("IPSCTranslator: dropping stale stream", "direction", "ipsc_to_mmdvm", "callControl", callControl)
+			if t.metrics != nil {
+				t.metrics.TranslatorActiveStreams.WithLabelValues("ipsc_to_mmdvm").Dec()
+			}
+		}
+	}
 }
 
 // buildIPSCHeader writes the common 18-byte IPSC header (bytes 0-17).
@@ -490,6 +543,7 @@ type reverseStreamState struct {
 	seq        uint8
 	burstIndex int  // 0-5 → A-F within a superframe
 	started    bool // whether we've seen a voice header
+	lastSeen   time.Time
 }
 
 // TranslateToMMDVM converts raw IPSC user packet data into MMDVM DMRD Packets.
@@ -497,6 +551,9 @@ type reverseStreamState struct {
 func (t *IPSCTranslator) TranslateToMMDVM(packetType byte, data []byte) []mmdvm.Packet {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	now := time.Now()
+	t.pruneStaleLocked(now)
 
 	if len(data) < 30 {
 		slog.Debug("IPSCTranslator: IPSC packet too short", "length", len(data))
@@ -543,6 +600,7 @@ func (t *IPSCTranslator) TranslateToMMDVM(packetType byte, data []byte) []mmdvm.
 			t.metrics.TranslatorActiveStreams.WithLabelValues("ipsc_to_mmdvm").Inc()
 		}
 	}
+	rss.lastSeen = now
 
 	// Determine what kind of IPSC burst this is from byte 30
 	burstType := data[30]

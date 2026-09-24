@@ -21,6 +21,18 @@ import (
 // a voice terminator packet is lost.
 const DefaultTimeout = 3 * time.Second
 
+// Limits on what is buffered behind a busy timeslot, so a long active
+// call can't make the pending buffer grow without bound. Packets beyond
+// these limits are dropped (Submit returns false as for a buffered one).
+const (
+	// DefaultMaxPendingStreams is the maximum number of calls queued
+	// behind the active one on each timeslot.
+	DefaultMaxPendingStreams = 4
+	// DefaultMaxPendingPackets is the maximum number of packets buffered
+	// per queued call (~30 s of voice at one burst every 60 ms).
+	DefaultMaxPendingPackets = 500
+)
+
 // activeCall tracks a single in-progress call on one timeslot.
 type activeCall struct {
 	streamID uint
@@ -54,12 +66,17 @@ type Manager struct {
 	timeout   time.Duration
 	metrics   *metrics.Metrics
 	direction string // "inbound" or "outbound" (for metric labels)
+
+	maxPendingStreams int
+	maxPendingPackets int
 }
 
-// NewManager creates a Manager with the default timeout.
+// NewManager creates a Manager with the default timeout and buffer limits.
 func NewManager() *Manager {
 	return &Manager{
-		timeout: DefaultTimeout,
+		timeout:           DefaultTimeout,
+		maxPendingStreams: DefaultMaxPendingStreams,
+		maxPendingPackets: DefaultMaxPendingPackets,
 	}
 }
 
@@ -168,6 +185,12 @@ func (m *Manager) Submit(slot bool, streamID uint, network string, packet any) b
 	// Slot is busy — buffer the packet in a pending stream.
 	ps := ss.findPending(streamID)
 	if ps == nil {
+		if len(ss.pending) >= m.maxPendingStreams {
+			slog.Debug("timeslot busy and pending queue full, dropping packet",
+				"slot", slot, "activeStream", ss.active.streamID,
+				"streamID", streamID, "network", network)
+			return false
+		}
 		ps = &pendingStream{
 			streamID: streamID,
 			network:  network,
@@ -176,6 +199,11 @@ func (m *Manager) Submit(slot bool, streamID uint, network string, packet any) b
 		slog.Debug("timeslot busy, buffering new stream",
 			"slot", slot, "activeStream", ss.active.streamID,
 			"pendingStream", streamID, "network", network)
+	}
+	if len(ps.packets) >= m.maxPendingPackets {
+		slog.Debug("timeslot pending stream buffer full, dropping packet",
+			"slot", slot, "streamID", streamID, "network", network)
+		return false
 	}
 	ps.packets = append(ps.packets, packet)
 	if m.metrics != nil {

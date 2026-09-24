@@ -3,6 +3,7 @@ package ipsc
 import (
 	"encoding/binary"
 	"testing"
+	"time"
 
 	"github.com/iu2tzo/dmrgo/dmr/enums"
 	"github.com/iu2tzo/dmrgo/dmr/layer2"
@@ -1048,5 +1049,80 @@ func TestPopulateEmbeddedSignallingNoEmbeddedData(t *testing.T) {
 		if b != 0 {
 			t.Fatalf("expected zero embedded data byte %d, got 0x%02X", i, b)
 		}
+	}
+}
+
+// ageAllStreams makes every tracked stream (both directions) look idle
+// for longer than staleStreamTimeout and allows an immediate prune.
+func ageAllStreams(tr *IPSCTranslator) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	old := time.Now().Add(-staleStreamTimeout - time.Second)
+	for _, ss := range tr.streams {
+		ss.lastSeen = old
+	}
+	for _, rss := range tr.reverseStreams {
+		rss.lastSeen = old
+	}
+	tr.lastPrune = time.Time{}
+}
+
+func TestTranslateToIPSCPrunesStaleStreams(t *testing.T) {
+	t.Parallel()
+	tr := newTestTranslator(t)
+
+	// A voice header whose terminator never arrives.
+	tr.TranslateToIPSC(makeTestMMDVMPacket(true, false, mmdvmFrameTypeDataSync, 1))
+	ageAllStreams(tr)
+
+	// Any later packet (another stream) sweeps the stale one.
+	pkt := makeTestMMDVMPacket(true, false, mmdvmFrameTypeDataSync, 1)
+	pkt.StreamID = 0x5678
+	tr.TranslateToIPSC(pkt)
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if _, ok := tr.streams[0x1234]; ok {
+		t.Fatal("expected stale stream to be pruned")
+	}
+	if _, ok := tr.streams[0x5678]; !ok {
+		t.Fatal("expected active stream to be kept")
+	}
+}
+
+func TestTranslateToMMDVMPrunesStaleStreams(t *testing.T) {
+	t.Parallel()
+	tr := newTestTranslator(t)
+
+	// A voice header (call control 0xAAAA) whose terminator never arrives.
+	tr.TranslateToMMDVM(0x80, makeTestIPSCPacket(0x80, ipscBurstVoiceHead, true, false))
+	ageAllStreams(tr)
+
+	next := makeTestIPSCPacket(0x80, ipscBurstVoiceHead, true, false)
+	binary.BigEndian.PutUint32(next[13:17], 0xBBBB)
+	tr.TranslateToMMDVM(0x80, next)
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if _, ok := tr.reverseStreams[0xAAAA]; ok {
+		t.Fatal("expected stale reverse stream to be pruned")
+	}
+	if _, ok := tr.reverseStreams[0xBBBB]; !ok {
+		t.Fatal("expected active reverse stream to be kept")
+	}
+}
+
+func TestPruneKeepsRecentStreams(t *testing.T) {
+	t.Parallel()
+	tr := newTestTranslator(t)
+	tr.TranslateToIPSC(makeTestMMDVMPacket(true, false, mmdvmFrameTypeDataSync, 1))
+
+	tr.mu.Lock()
+	tr.lastPrune = time.Time{}
+	tr.pruneStaleLocked(time.Now())
+	_, ok := tr.streams[0x1234]
+	tr.mu.Unlock()
+	if !ok {
+		t.Fatal("expected recently seen stream to survive pruning")
 	}
 }
